@@ -291,8 +291,6 @@ RUST_LOG=info                                      # 日志级别 (tracing/env_l
 |------|------|------|
 | `import_all.py` | Entity 批量导入 | 标记为一次性迁移工具，纳入 `scripts/` 目录 |
 | `import_types.py` | Type 层级导入 | 同上 |
-| `patrol_sim.py` | 巡逻推演演示 | 功能已由 Rust `TimelineEngine` 替代，可归档 |
-
 > Python 脚本仅作为运维辅助，核心逻辑均在 Rust 中。未来可移植为 Rust CLI 子命令。
 
 ---
@@ -320,7 +318,6 @@ ontologica_rust_graph/
 │   ├── import_props.py                     #   属性导入
 │   ├── create_p8a.py                       #   P-8A 测试数据创建
 │   ├── test_patrol.py                      #   巡逻 API 测试
-│   ├── patrol_sim.py                       #   巡逻推演演示（已由 Rust TimelineEngine 替代）
 │   └── verify.py                           #   数据验证
 ├── rules/                                  # SWRL 规则文件
 │   └── asw_rules.swrl

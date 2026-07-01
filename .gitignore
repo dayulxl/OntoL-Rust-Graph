@@ -3,3 +3,9 @@
 /target-check
 logs/
 .env
+
+# Claude Code / IDE 内部工具文件
+.agents/
+.claude/
+.codegraph/
+skills-lock.json
