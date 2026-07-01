@@ -1,0 +1,18 @@
+[package]
+name = "ontologica_rust_graph"
+version = "0.1.0"
+edition = "2024"
+description = "本体工程推理机 - 图数据库底座"
+authors = ["梁晓亮"]
+
+[dependencies]
+ontology-storage = { path = "crates/ontology-storage" }
+ontology-reasoner = { path = "crates/ontology-reasoner" }
+
+[features]
+default = ["neo4j"]
+in-memory = ["ontology-storage/in-memory"]
+neo4j = ["ontology-storage/neo4j"]
+
+[workspace]
+members = ["crates/ontology-storage", "crates/ontology-reasoner", "crates/ontology-server"]

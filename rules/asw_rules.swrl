@@ -1,0 +1,9 @@
+# ASW 反潜作战 SWRL 规则集
+# 语法: [ruleName: atom ^ atom ^ ... -> consequentAtom ^ ...]
+# 加载: POST /rules/reload 或 启动时自动加载
+
+# 规则1: 高速蓝方实体标记为威胁
+[speedThreat: :Entity(?x) ^ swrlb:greaterThan(?x.speed, 40) ^ swrlb:equal(?x.command_side, 1) -> :Entity(?x) ^ hasThreatLevel(?x, 中)]
+
+# 规则2: 低电量实体标记为需补给
+[lowPower: :Entity(?x) ^ swrlb:greaterThan(?x.power, 0) ^ swrlb:greaterThanOrEqual(150, ?x.power) -> :Entity(?x) ^ needsSupply(?x, true)]

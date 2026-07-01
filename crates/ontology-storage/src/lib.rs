@@ -1,0 +1,36 @@
+//! # ontology-storage
+//!
+//! 存储层 crate，提供属性图数据库的抽象仓库模式。
+//!
+//! ## 架构分层
+//!
+//! - **`repository`**  — 业务依赖的 Trait 抽象（`GraphRepository`, `Transaction`）
+//! - **`mapper`**      — 核心转换层：本体模型 ↔ 属性图 ↔ Cypher 方言
+//! - **`adapters`**    — 适配器实现：`neo4j` / `in_memory`
+//! - **`factory`**     — 运行时工厂，根据配置返回 `Arc<dyn GraphRepository>`
+//!
+//! ## Feature flags
+//!
+//! - `in-memory` (默认) — 启用内存属性图存储
+//! - `neo4j`            — 启用 Neo4j 后端适配器
+
+pub mod error;
+pub mod factory;
+pub mod mapper;
+pub mod repository;
+pub mod adapters;
+
+#[cfg(any(feature = "neo4j", feature = "llm"))]
+pub mod ontology;
+
+pub use error::{GraphError, MappingError, StoreError};
+pub use mapper::graph::property::PropertyValue;
+pub use mapper::graph::{node::Node, relationship::Relationship};
+pub use mapper::graph::pattern::{GraphPattern, NodePattern, RelationshipPattern};
+
+#[cfg(feature = "llm")]
+pub use mapper::llm;
+
+pub use repository::graph_store::GraphRepository;
+pub use repository::transaction::Transaction;
+pub use factory::StorageConfig;
