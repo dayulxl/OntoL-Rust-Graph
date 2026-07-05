@@ -1,4 +1,4 @@
-//! Ontology Server — HTTP API 入口 (v0.2)。
+//! Ontology Server — HTTP API 入口 (v0.3)。
 
 mod app;
 mod config;
@@ -13,6 +13,7 @@ use ontology_storage::adapters::in_memory::executor::InMemoryAdapter;
 use app::AppState;
 
 fn main() {
+    let _ = dotenvy::dotenv(); // 加载 .env 文件（失败时静默忽略）
     ontology_reasoner::logger::init();
     let cfg = config::ServerConfig::from_env();
 
@@ -36,44 +37,44 @@ fn main() {
 
     let state = Arc::new(Mutex::new(AppState::new(reasoner)));
 
-    // ── 3. 热加载 Neo4j 中的 SWRL 规则 ──
+    // ── 3. 热加载图数据库中的 SWRL 规则 ──
     if let Ok(app) = state.lock() {
         let rule_nodes = app.repo.get_nodes_by_label("Rule").unwrap_or_default();
         if !rule_nodes.is_empty() {
-            println!("   找到 {} 条 Neo4j 规则节点，加载中...", rule_nodes.len());
+            println!("   找到 {} 条 Rule 规则节点，加载中...", rule_nodes.len());
         }
     }
-    // 延迟到首次 reason() 调用时加载
 
     // ── 4. 启动 HTTP 服务 ──
     println!("\n🚀 启动 HTTP 服务: http://0.0.0.0:{}\n", cfg.port);
     server::start(cfg, state);
 }
 
-/// 根据 feature + config 选择后端
+/// 根据 feature + config 选择后端。
+///
+/// memgraph:// → MemgraphAdapter（主力后端）
+/// 连接失败 → 回退内存后端
 fn create_repo(cfg: &config::ServerConfig) -> ontology_storage::repository::graph_store::SharedRepository {
-    #[cfg(feature = "neo4j")]
+    // ── Memgraph（主力后端）──
+    #[cfg(feature = "memgraph")]
     {
-        println!("🔌 连接 Neo4j ({} @ {})...", cfg.neo4j_user, cfg.neo4j_uri);
-        match ontology_storage::adapters::neo4j::Neo4jAdapter::connect(
-            &cfg.neo4j_uri,
-            &cfg.neo4j_user,
-            &cfg.neo4j_password,
+        println!("🔌 连接 Memgraph ({} @ {})...", cfg.graph_user, cfg.graph_uri);
+        match ontology_storage::adapters::memgraph::MemgraphAdapter::connect(
+            &cfg.graph_uri,
+            &cfg.graph_user,
+            &cfg.graph_password,
         ) {
             Ok(adapter) => {
-                println!("   ✅ Neo4j 连接成功");
+                println!("   ✅ Memgraph 连接成功");
                 return Arc::new(adapter);
             }
             Err(e) => {
-                eprintln!("   ⚠ Neo4j 连接失败: {}。回退到内存后端。", e);
+                eprintln!("   ⚠ Memgraph 连接失败: {}。回退到内存后端。", e);
             }
         }
     }
 
-    // 非 neo4j feature 时用内存后端
-    #[cfg(not(feature = "neo4j"))]
-    let _ = cfg;  // suppress unused warning
-
+    // ── 内存回退 ──
     println!("💾 使用内存后端");
     Arc::new(InMemoryAdapter::new())
 }

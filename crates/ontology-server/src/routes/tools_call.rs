@@ -14,6 +14,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use ontology_reasoner::graph::find_entity_any;
+
 use crate::app::AppState;
 use super::super::server::json_error;
 
@@ -108,6 +110,7 @@ pub fn handle(
                 "tool": tool_name,
                 "ok": false,
                 "error": e,
+                "arguments": arguments,
             });
             (400, resp.to_string())
         }
@@ -174,13 +177,12 @@ fn dispatch_get_entity_context(
     let code = args.get("code").and_then(|v| v.as_str()).ok_or("'code' is required")?;
     let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(2).max(1).min(3) as usize;
 
-    // 查找实体
-    let all = app.repo.get_nodes_by_label("Entity").map_err(|e| e.to_string())?;
-    let entity = all.iter().find(|n| n.property("code").and_then(|v| v.as_str()) == Some(code))
+    // 查找实体 — 使用统一的跨标签查找（Entity/Event/Patrol/Strike/Type/Behavior）
+    let entity = find_entity_any(app.repo.as_ref(), code)
         .ok_or_else(|| format!("Entity '{}' not found", code))?;
 
     let mut context = serde_json::json!({
-        "entity": node_to_json(entity),
+        "entity": node_to_json(&entity),
         "neighbors": [],
     });
 
@@ -198,7 +200,7 @@ fn dispatch_get_entity_context(
                 if !visited.contains(&neighbor_code) {
                     visited.insert(neighbor_code.clone());
                     // 找邻居节点
-                    for label in &["Entity", "Type", "Patrol"] {
+                    for label in &["Entity", "Type", "Patrol", "Behavior"] {
                         let nodes = app.repo.get_nodes_by_label(label).unwrap_or_default();
                         if let Some(n) = nodes.iter().find(|n| {
                             n.property("code").and_then(|v| v.as_str()) == Some(&neighbor_code)
@@ -401,43 +403,54 @@ fn dispatch_update_entity(
     args: &serde_json::Value,
     app: &AppState,
 ) -> Result<serde_json::Value, String> {
-    let code = args.get("code").and_then(|v| v.as_str()).ok_or("'code' is required")?;
+    use std::collections::HashMap;
+    use ontology_reasoner::graph::update_entity_properties;
 
-    let all = app.repo.get_nodes_by_label("Entity").map_err(|e| e.to_string())?;
-    let entity = all.iter().find(|n| n.property("code").and_then(|v| v.as_str()) == Some(code))
-        .ok_or_else(|| format!("Entity '{}' not found", code))?;
+    let id = args.get("id").and_then(|v| v.as_str()).ok_or("'id' is required")?;
+    let updates_json = args.get("updates").and_then(|v| v.as_object())
+        .ok_or("'updates' is required and must be an object")?;
 
-    let mut new_props = entity.properties.clone();
-    if let Some(arr) = args.get("Space_abs").and_then(|v| v.as_array()) {
-        use ontology_storage::mapper::graph::property::PropertyValue;
-        let list: Vec<PropertyValue> = arr.iter().map(|v| match v {
-            serde_json::Value::Number(n) => {
-                if let Some(f) = n.as_f64() { PropertyValue::Float(f) }
-                else { PropertyValue::Integer(n.as_i64().unwrap_or(0)) }
-            }
-            _ => PropertyValue::from(v.as_str().unwrap_or("")),
-        }).collect();
-        new_props.insert("Space_abs".to_string(), PropertyValue::List(list));
-    }
-    if let Some(d) = args.get("duration").and_then(|v| v.as_i64()) {
-        use ontology_storage::mapper::graph::property::PropertyValue;
-        new_props.insert("duration".to_string(), PropertyValue::Integer(d));
-    }
-    if let Some(s) = args.get("status").and_then(|v| v.as_str()) {
-        use ontology_storage::mapper::graph::property::PropertyValue;
-        new_props.insert("status".to_string(), PropertyValue::from(s));
-    }
-    if let Some(cs) = args.get("command_side").and_then(|v| v.as_i64()) {
-        use ontology_storage::mapper::graph::property::PropertyValue;
-        new_props.insert("command_side".to_string(), PropertyValue::Integer(cs));
+    if updates_json.is_empty() {
+        return Err("'updates' must not be empty".into());
     }
 
-    use ontology_storage::mapper::graph::node::Node;
-    let _ = app.repo.delete_node(code);
-    app.repo.insert_node(&Node::new(entity.labels.clone(), new_props))
+    let cope_version = args.get("cope_version").and_then(|v| v.as_str());
+
+    let mut updates = HashMap::new();
+    for (k, v) in updates_json {
+        updates.insert(k.clone(), json_to_prop_inner(v));
+    }
+
+    let updated = update_entity_properties(app.repo.as_ref(), id, updates, cope_version)
         .map_err(|e| format!("Update failed: {}", e))?;
 
-    Ok(serde_json::json!({ "updated": code, "status": "ok" }))
+    let props: serde_json::Map<_, _> = updated.properties.iter()
+        .map(|(k, v)| (k.clone(), prop_to_json(v)))
+        .collect();
+
+    Ok(serde_json::json!({
+        "updated": true,
+        "entity": { "labels": updated.labels, "properties": props },
+    }))
+}
+
+fn json_to_prop_inner(v: &serde_json::Value) -> ontology_storage::PropertyValue {
+    use ontology_storage::PropertyValue;
+    match v {
+        serde_json::Value::String(s) => PropertyValue::String(s.clone()),
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64() { PropertyValue::Float(f) }
+            else { PropertyValue::Integer(n.as_i64().unwrap_or(0)) }
+        }
+        serde_json::Value::Bool(b) => PropertyValue::Boolean(*b),
+        serde_json::Value::Array(arr) => PropertyValue::List(arr.iter().map(json_to_prop_inner).collect()),
+        serde_json::Value::Object(obj) => {
+            let map: std::collections::HashMap<String, PropertyValue> = obj
+                .iter().map(|(k, v)| (k.clone(), json_to_prop_inner(v))).collect();
+            PropertyValue::Map(map)
+        }
+        serde_json::Value::Null => PropertyValue::Null,
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -450,9 +463,15 @@ fn dispatch_infer_forward(
 ) -> Result<serde_json::Value, String> {
     use ontology_reasoner::graph::{Direction, ExploreConfig, GraphExplorer};
 
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or("'id' is required")?;
+    let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let code = args.get("code").and_then(|v| v.as_str());
+    if id.is_empty() && code.is_none() {
+        return Err("至少需要 'id' 或 'code' 之一".into());
+    }
     let name = args.get("name").and_then(|v| v.as_str()).ok_or("'name' is required")?;
-    let relation = args.get("relation").and_then(|v| v.as_str()).ok_or("'relation' is required")?;
+    let relation = args.get("relation").and_then(|v| v.as_str()).unwrap_or("");
+    let cope_version = args.get("cope_version").and_then(|v| v.as_str())
+        .ok_or("'cope_version' is required")?;
     let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3).min(5) as usize;
     let direction_str = args.get("direction").and_then(|v| v.as_str()).unwrap_or("outgoing");
     let confidence_threshold = args.get("confidence_threshold").and_then(|v| v.as_f64());
@@ -461,10 +480,12 @@ fn dispatch_infer_forward(
 
     let config = ExploreConfig {
         start_id: id.to_string(),
+        start_code: code.map(|s| s.to_string()),
         relation: relation.to_string(),
         max_depth: depth,
         direction: Direction::from_str(direction_str),
         confidence_threshold,
+        cope_version: Some(cope_version.to_string()),
     };
 
     let result = explorer.explore(&config)?;
@@ -520,16 +541,17 @@ fn dispatch_infer_forward(
         None => "N/A".into(),
     };
 
+    let rel_display = if relation.is_empty() { "所有关系" } else { relation };
     let summary = format!(
         "{}: 实体 '{}' 沿 '{}' 关系 {} 方向遍历 {} 跳, 匹配 {} 条规则。有置信度数据的节点平均: {}, 因低于阈值停止: {} 处",
-        name, source_code, relation, direction_str, chain_count,
+        name, source_code, rel_display, direction_str, chain_count,
         result.chain.iter().flat_map(|h| &h.matching_rules).count(),
         avg_str, stopped_count,
     );
 
     Ok(serde_json::json!({
         "source": node_to_json(&result.source),
-        "relation": relation,
+        "relation": rel_display,
         "direction": direction_str,
         "confidence_threshold": confidence_threshold,
         "chain": chain_json,

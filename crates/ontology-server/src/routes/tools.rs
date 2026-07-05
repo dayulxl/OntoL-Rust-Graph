@@ -65,17 +65,15 @@ pub fn handle() -> (u16, String) {
             "type": "function",
             "function": {
                 "name": "update_entity",
-                "description": "更新 Entity 的字段：位置、状态、command_side、时序字段等。",
+                "description": "修改 Entity 的属性值。传入 ID 和要修改的键值对（可多个），同时支持副本版本号：如果实体 cope_version 为空，自动克隆副本再修改，不污染原实体。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": { "type": "string", "description": "Entity.code" },
-                        "Space_abs": { "type": "array", "description": "[纬度, 经度, 深度, 高度]" },
-                        "duration": { "type": "integer", "description": "持续时间（秒）" },
-                        "status": { "type": "string", "description": "有效/无效" },
-                        "command_side": { "type": "integer", "description": "红蓝方" }
+                        "id": { "type": "string", "description": "实体 code" },
+                        "updates": { "type": "object", "description": "要修改的键值对，如 {\"status\": \"无效\", \"confidence\": 0.95, \"speed\": 250}" },
+                        "cope_version": { "type": "string", "description": "副本版本号。原实体（cope_version 为空）会先克隆到此版本的副本再修改" }
                     },
-                    "required": ["code"]
+                    "required": ["id", "updates"]
                 }
             }
         },
@@ -201,18 +199,20 @@ pub fn handle() -> (u16, String) {
             "type": "function",
             "function": {
                 "name": "infer_forward",
-                "description": "向前推理：给定实体ID和关系名，沿图自动多跳遍历，检测每跳的状态变化（位置/速度/状态/功率/置信度），匹配SWRL规则，预测下一步操作。无需手动指定路径，系统全自动推导。",
+                "description": "向前推理：给定实体ID和关系名，沿图自动多跳遍历，检测每跳的状态变化（位置/速度/状态/功率/置信度），匹配SWRL规则，预测下一步操作。遇到 cope_version 不匹配的 Entity 自动克隆副本进行推理，确保不同版本隔离。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "id": { "type": "string", "description": "起始实体 code" },
+                        "id": { "type": "string", "description": "起始实体 ID（按 id/iri 检索）" },
+                        "code": { "type": "string", "description": "起始实体 code（按 code 检索）。与 id 同时传入时，两者都匹配才命中" },
                         "name": { "type": "string", "description": "推理任务名称" },
                         "relation": { "type": "string", "description": "要沿哪个关系向前推导（如 移动/打击/subClassOf/composedOf）" },
+                        "cope_version": { "type": "string", "description": "副本版本号。推理时遇到 cope_version 不匹配的 Entity 自动克隆副本" },
                         "depth": { "type": "integer", "description": "最大遍历深度 1-5，默认 3" },
                         "direction": { "type": "string", "description": "遍历方向：outgoing(默认)/incoming/both" },
                         "confidence_threshold": { "type": "number", "description": "全局置信度阈值 0.0-1.0，低于此值的跳标记为低置信度" }
                     },
-                    "required": ["id", "name", "relation"]
+                    "required": ["name", "cope_version"]
                 }
             }
         },

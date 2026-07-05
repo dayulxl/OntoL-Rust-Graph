@@ -51,8 +51,10 @@ impl Direction {
 
 /// 遍历配置
 pub struct ExploreConfig {
-    /// 起始实体 ID（必填）
+    /// 起始实体 ID（按 id/iri 检索）
     pub start_id: String,
+    /// 起始实体 code（按 code 检索），与 start_id 同时传入时两者都匹配才命中
+    pub start_code: Option<String>,
     /// 要跟随的关系类型（必填）
     pub relation: String,
     /// 最大遍历深度（默认 3，最大 5）
@@ -64,6 +66,9 @@ pub struct ExploreConfig {
     /// - 有值且 ≥ 阈值 → 继续传播
     /// - 有值且 < 阈值 → 停止从这个节点继续传播
     pub confidence_threshold: Option<f64>,
+    /// 副本版本号：遍历过程中遇到 Entity 节点时，
+    /// 如果节点的 cope_version 不匹配，则克隆副本
+    pub cope_version: Option<String>,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -143,13 +148,51 @@ impl GraphExplorer {
         let max_depth = config.max_depth.min(5).max(1);
 
         // ── 1. 实体解析 ──
-        let source = util::find_entity_any(self.repo.as_ref(), &config.start_id)
-            .ok_or_else(|| format!("实体 '{}' 未找到", config.start_id))?;
+        let source_orig = util::find_entity_by_id_code(
+            self.repo.as_ref(),
+            &config.start_id,
+            config.start_code.as_deref(),
+        ).ok_or_else(|| {
+            let desc = if !config.start_id.is_empty() && config.start_code.is_some() {
+                format!("id='{}' + code='{}'", config.start_id, config.start_code.as_deref().unwrap())
+            } else if !config.start_id.is_empty() {
+                format!("id='{}'", config.start_id)
+            } else {
+                format!("code='{}'", config.start_code.as_deref().unwrap_or(""))
+            };
+            format!("实体 '{}' 未找到", desc)
+        })?;
+
+        // 副本版本：推理开始前全量克隆图中所有原实体及关系
+        let _code_map;
+        let source_eff;
+        if let Some(ref cv) = config.cope_version {
+            let (map, new_source) = util::clone_all_for_version(
+                self.repo.as_ref(),
+                &config.start_id,
+                config.start_code.as_deref(),
+                cv,
+            )?;
+            _code_map = map;
+            source_eff = new_source;
+        } else {
+            _code_map = Default::default();
+            source_eff = source_orig.property("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&config.start_id)
+                .to_string();
+        };
+
+        // 用克隆后的副本为源实体
+        let source = self.repo.get_node(&source_eff)
+            .ok()
+            .flatten()
+            .unwrap_or(source_orig);
 
         let source_id = source
             .property("code")
             .and_then(|v| v.as_str())
-            .unwrap_or(&config.start_id)
+            .unwrap_or(&source_eff)
             .to_string();
 
         // ── 2. 源上下文 ──
@@ -165,6 +208,12 @@ impl GraphExplorer {
             None,
         );
         let source_incoming = util::summarize_relations(&source_incoming_rel);
+
+        let rel_filter = if config.relation.is_empty() {
+            None
+        } else {
+            Some(config.relation.as_str())
+        };
 
         // ── 3. BFS 遍历 ──
         let mut chain = Vec::new();
@@ -190,7 +239,7 @@ impl GraphExplorer {
             if matches!(config.direction, Direction::Outgoing | Direction::Both) {
                 for r in self
                     .repo
-                    .get_relationships(&current_id, Some(&config.relation))
+                    .get_relationships(&current_id, rel_filter)
                     .unwrap_or_default()
                 {
                     relations.push((true, r));
@@ -200,7 +249,7 @@ impl GraphExplorer {
                 for r in util::find_incoming_relationships(
                     self.repo.as_ref(),
                     &current_id,
-                    Some(&config.relation),
+                    rel_filter,
                 ) {
                     relations.push((false, r));
                 }
@@ -216,9 +265,25 @@ impl GraphExplorer {
                 if visited.contains(target_id.as_str()) {
                     continue;
                 }
-                visited.insert(target_id.to_string());
 
                 let target_node = self.repo.get_node(target_id).ok().flatten();
+
+                // 副本版本守卫：只允许在同一版本内遍历
+                if let Some(ref cv) = config.cope_version {
+                    let target_ver = target_node.as_ref()
+                        .and_then(|n| n.property("cope_version").and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    if target_ver != cv.as_str() {
+                        continue; // 跳过不同版本或原实体
+                    }
+                }
+
+                let effective_target_id = target_id.clone();
+
+                if visited.contains(&effective_target_id) {
+                    continue;
+                }
+                visited.insert(effective_target_id.clone());
 
                 // ── 4. 逐跳分析 ──
                 let target_type_chain =
@@ -228,12 +293,12 @@ impl GraphExplorer {
                     self.repo.as_ref(),
                     &current_id,
                     &rel.rel_type,
-                    target_id,
+                    &effective_target_id,
                     "rules",
                 );
 
                 let target_outgoing =
-                    util::predict_next_steps(self.repo.as_ref(), target_id);
+                    util::predict_next_steps(self.repo.as_ref(), &effective_target_id);
 
                 // ── 置信度检查（读取节点自身 confidence 属性） ──
                 let node_confidence = util::prop_as_f64(
@@ -252,7 +317,7 @@ impl GraphExplorer {
                         "incoming".into()
                     },
                     source_id: current_id.clone(),
-                    target_id: target_id.clone(),
+                    target_id: effective_target_id.clone(),
                     rel_type: rel.rel_type.clone(),
                     source_node: current_node.clone(),
                     target_node,
@@ -265,7 +330,7 @@ impl GraphExplorer {
 
                 // 只有未阻断时才继续传播
                 if !stop_propagation {
-                    queue.push_back((target_id.clone(), current_depth + 1));
+                    queue.push_back((effective_target_id.clone(), current_depth + 1));
                 }
             }
         }

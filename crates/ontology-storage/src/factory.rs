@@ -10,9 +10,9 @@ use crate::repository::graph_store::SharedRepository;
 /// 存储后端配置
 #[derive(Debug, Clone)]
 pub enum StorageConfig {
-    /// Neo4j 后端
-    #[cfg(feature = "neo4j")]
-    Neo4j {
+    /// Memgraph 后端（Bolt 协议，主力）
+    #[cfg(feature = "memgraph")]
+    Memgraph {
         uri: String,
         user: String,
         password: String,
@@ -27,9 +27,9 @@ impl StorageConfig {
     /// 根据配置构建对应的 `SharedRepository`
     pub fn build(self) -> Result<SharedRepository, StoreError> {
         match self {
-            #[cfg(feature = "neo4j")]
-            StorageConfig::Neo4j { uri, user, password } => {
-                let adapter = crate::adapters::neo4j::Neo4jAdapter::connect(
+            #[cfg(feature = "memgraph")]
+            StorageConfig::Memgraph { uri, user, password } => {
+                let adapter = crate::adapters::memgraph::MemgraphAdapter::connect(
                     &uri, &user, &password,
                 )?;
                 Ok(Arc::new(adapter))

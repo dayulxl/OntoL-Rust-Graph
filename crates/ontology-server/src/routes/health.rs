@@ -1,4 +1,4 @@
-//! GET /health — 健康检查 + Neo4j 状态。
+//! GET /health — 健康检查。
 
 use std::sync::{Arc, Mutex};
 use crate::app::AppState;
@@ -16,7 +16,7 @@ pub fn handle(state: &Arc<Mutex<AppState>>) -> (u16, String) {
         "status": "ok",
         "service": "ontology-server",
         "version": env!("CARGO_PKG_VERSION"),
-        "backend": if cfg!(feature = "neo4j") { "neo4j" } else { "in-memory" },
+        "backend": if cfg!(feature = "memgraph") { "memgraph" } else { "in-memory" },
         "counts": {
             "entities": entity_count,
             "types": type_count,

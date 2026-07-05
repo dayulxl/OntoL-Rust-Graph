@@ -33,19 +33,61 @@ pub struct RuleMatch {
 // 实体查找
 // ═══════════════════════════════════════════════════════════
 
+/// 按 id + code 组合查找实体。
+///
+/// - 仅 id：按 id/iri 检索
+/// - 仅 code：按 code 检索
+/// - 两者都有：两者都匹配才命中
+pub fn find_entity_by_id_code(
+    repo: &dyn GraphRepository,
+    id: &str,
+    code: Option<&str>,
+) -> Option<Node> {
+    if id.is_empty() && code.is_none() {
+        return None;
+    }
+
+    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+        let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
+        for n in &nodes {
+            let matches_id = if id.is_empty() {
+                true
+            } else {
+                n.property("id").and_then(|v| v.as_str()) == Some(id)
+                    || n.property("iri").and_then(|v| v.as_str()) == Some(id)
+                    || repo.get_node(id).ok().flatten().is_some()
+            };
+            let matches_code = match code {
+                Some(c) => n.property("code").and_then(|v| v.as_str()) == Some(c),
+                None => true,
+            };
+            if matches_id && matches_code {
+                return Some(n.clone());
+            }
+        }
+    }
+
+    // 回退：id 非空时用 find_entity_any
+    if !id.is_empty() && code.is_none() {
+        return find_entity_any(repo, id);
+    }
+    None
+}
+
 /// 在所有标签类型中按 ID 查找实体。
 ///
-/// 按以下顺序尝试匹配：
-/// 1. 直接 `get_node(id)`（按 iri 查找）
-/// 2. 扫描各标签节点的 `code` / `iri` / `id` / `name` 属性
+/// 分层匹配（优先级递减）：
+/// 1. 直接 `get_node(id)`（按 iri）
+/// 2. 精确匹配 `code` / `iri` / `id` / `name`
+/// 3. 模糊匹配 `name` / `desc`（子串包含，用于自然语言查询）
 pub fn find_entity_any(repo: &dyn GraphRepository, id: &str) -> Option<Node> {
     // 1) 直接按 iri 查找
     if let Ok(Some(n)) = repo.get_node(id) {
         return Some(n);
     }
 
-    // 2) 按标签 + 多字段匹配扫描
-    for label in &["Entity", "Patrol", "Strike", "Type"] {
+    // 2) 精确匹配
+    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
             if n.property("code").and_then(|v| v.as_str()) == Some(id)
@@ -53,6 +95,23 @@ pub fn find_entity_any(repo: &dyn GraphRepository, id: &str) -> Option<Node> {
                 || n.property("id").and_then(|v| v.as_str()) == Some(id)
                 || n.property("name").and_then(|v| v.as_str()) == Some(id)
             {
+                return Some(n.clone());
+            }
+        }
+    }
+
+    // 3) 模糊回退 — name / desc 包含查询字符串
+    // 调用方可能用自然语言描述（如 "雷达故障" 匹配 "雷达" 或 desc 中的 "雷达故障"）
+    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+        let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
+        for n in &nodes {
+            let name_match = n.property("name")
+                .and_then(|v| v.as_str().map(|s| s.contains(id)))
+                .unwrap_or(false);
+            let desc_match = n.property("desc")
+                .and_then(|v| v.as_str().map(|s| s.contains(id)))
+                .unwrap_or(false);
+            if name_match || desc_match {
                 return Some(n.clone());
             }
         }
@@ -74,7 +133,7 @@ pub fn find_incoming_relationships(
     rel_type: Option<&str>,
 ) -> Vec<Relationship> {
     let mut results = Vec::new();
-    for label in &["Entity", "Patrol", "Strike", "Type"] {
+    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
             let ncode = n.property("code").and_then(|v| v.as_str()).unwrap_or("");
@@ -268,6 +327,251 @@ pub fn prop_as_f64(val: Option<&PropertyValue>) -> Option<f64> {
         Some(PropertyValue::Integer(i)) => Some(*i as f64),
         _ => None,
     }
+}
+
+/// 克隆单个实体到指定版本（只克隆节点，不复制关系）。
+///
+/// **只用副本做推理，不使用原实体。**
+///
+/// - 如果实体的 code 已含 `_v{target_version}` 后缀且 cope_version 匹配 → 已是副本，直接返回
+/// - 如果副本已存在（之前克隆过）→ 直接返回已有副本，不重复创建
+/// - 否则，克隆节点：所有属性 + 标签一致，`cope_version` 设为 `target_version`，
+///   `code` 追加 `_v{target_version}` 后缀
+///
+/// 关系的复制由调用方（`clone_all_for_version`）统一处理。
+///
+/// 返回副本的新 code。
+pub fn ensure_cope_version(
+    repo: &dyn GraphRepository,
+    entity: &Node,
+    target_version: &str,
+) -> Result<String, String> {
+    let original_code = entity
+        .property("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let new_code = format!("{}_v{}", original_code, target_version);
+
+    // 已经是副本 → 直接返回
+    let current_version = entity
+        .property("cope_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if original_code.ends_with(&format!("_v{}", target_version)) && current_version == target_version {
+        return Ok(original_code.to_string());
+    }
+
+    // 副本已存在 → 直接返回
+    if let Ok(Some(_existing)) = repo.get_node(&new_code) {
+        return Ok(new_code);
+    }
+
+    // 构造副本节点
+    let mut new_props = entity.properties.clone();
+    new_props.insert("cope_version".to_string(), PropertyValue::from(target_version));
+    new_props.insert("code".to_string(), PropertyValue::from(new_code.as_str()));
+
+    let cloned = Node::new(entity.labels.clone(), new_props);
+    repo.insert_node(&cloned)
+        .map_err(|e| format!("clone insert '{}': {}", new_code, e))?;
+
+    Ok(new_code)
+}
+
+/// 克隆图中所有本体对象及其关系到指定版本。
+///
+/// **不修改任何原数据（scenario_version 为空的原始实体）。**
+///
+/// 步骤：
+/// 1. 全量扫描：收集所有标签的实体节点，筛选出原实体（cope_version 为空或非当前版本）
+/// 2. 全量克隆：对每个原实体创建版本副本（code 追加 `_v{version}` 后缀）
+/// 3. 关系复制：复制原实体之间的所有关系到副本之间（原 A→B 变为 副本A→副本B）
+///
+/// 返回 (旧code→新code 映射, 克隆后的源实体code)
+pub fn clone_all_for_version(
+    repo: &dyn GraphRepository,
+    start_id: &str,
+    start_code: Option<&str>,
+    target_version: &str,
+) -> Result<(std::collections::HashMap<String, String>, String), String> {
+    use std::collections::HashMap;
+
+    // ── 1. 全量扫描：收集所有原实体（cope_version 为空） ──
+    let mut all_ids: Vec<String> = Vec::new();
+    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+        let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
+        for n in &nodes {
+            let code = n.property("code").and_then(|v| v.as_str()).unwrap_or("");
+            if code.is_empty() { continue; }
+            let ver = n.property("cope_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            // 只克隆原实体（cope_version 为空），跳过已有副本
+            if ver.is_empty() {
+                all_ids.push(code.to_string());
+            }
+        }
+    }
+
+    // ── 2. 解析源实体 ──
+    let source = find_entity_by_id_code(repo, start_id, start_code)
+        .or_else(|| find_entity_any(repo, start_id))
+        .ok_or_else(|| format!("实体 '{}' 未找到", start_id))?;
+    let source_code = source.property("code").and_then(|v| v.as_str()).unwrap_or(start_id).to_string();
+
+    // 如果源实体是已有副本，直接用
+    if let Some(ref sc) = start_code {
+        if let Ok(Some(n)) = repo.get_node(sc) {
+            let ver = n.property("cope_version").and_then(|v| v.as_str()).unwrap_or("");
+            if ver == target_version {
+                // 源已是此版本副本，不需要克隆
+                let mut empty_map = HashMap::new();
+                empty_map.insert(sc.to_string(), sc.to_string());
+                return Ok((empty_map, sc.to_string()));
+            }
+        }
+    }
+
+    // ── 3. 全量克隆：每个原实体创建一个版本副本 ──
+    let mut code_map: HashMap<String, String> = HashMap::new();
+    for id in &all_ids {
+        if let Ok(Some(node)) = repo.get_node(id) {
+            match ensure_cope_version(repo, &node, target_version) {
+                Ok(new_code) => {
+                    code_map.insert(id.clone(), new_code);
+                }
+                Err(e) => return Err(format!("克隆 '{}' 失败: {}", id, e)),
+            }
+        }
+    }
+
+    // ── 4. 关系复制：副本之间建立与原实体相同的关系 ──
+    // 遍历所有原实体，复制其出向关系到副本之间
+    for (old_code, new_code) in &code_map {
+        let out_rels = repo.get_relationships(old_code, None).unwrap_or_default();
+        for r in &out_rels {
+            // 目标如果在克隆映射中 → 指向副本；否则跳过（不指向原实体）
+            if let Some(new_tgt) = code_map.get(&r.end_node_id) {
+                let new_rel = Relationship {
+                    rel_type: r.rel_type.clone(),
+                    start_node_id: new_code.clone(),
+                    end_node_id: new_tgt.clone(),
+                    properties: r.properties.clone(),
+                };
+                let _ = repo.insert_relationship(&new_rel);
+            }
+        }
+    }
+
+    // 源实体对应的副本 code
+    let new_source = if source_code.is_empty() {
+        code_map.values().next().cloned()
+            .ok_or_else(|| "克隆失败：无实体".to_string())?
+    } else {
+        code_map.get(&source_code).cloned()
+            .ok_or_else(|| format!("克隆源实体 '{}' 失败", source_code))?
+    };
+
+    Ok((code_map, new_source))
+}
+
+/// 按副本版本号删除所有副本实体及其关联关系。
+///
+/// 步骤：
+/// 1. 扫描所有 `Entity` 标签的节点，找到 `cope_version` 匹配的副本
+/// 2. 对每个副本，DETACH DELETE（删除节点 + 所有关联关系）
+///
+/// 返回删除的节点数。
+pub fn delete_by_cope_version(
+    repo: &dyn GraphRepository,
+    target_version: &str,
+) -> usize {
+    let mut deleted = 0usize;
+
+    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+        let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
+        for n in &nodes {
+            let ver = n.property("cope_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if ver == target_version {
+                let code = n.property("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if let Ok(cnt) = repo.delete_node(code) {
+                    deleted += cnt;
+                }
+            }
+        }
+    }
+
+    deleted
+}
+
+/// 修改图数据库中指定实体的属性值。
+///
+/// 根据 ID（code）查找实体，用传入的键值对覆盖其属性。
+///
+/// **副本保护**：如果实体的 `cope_version` 为空（原实体），则先克隆一份副本
+/// （调用 `ensure_cope_version`），在副本上修改，不污染原实体。
+///
+/// 返回更新后的实体。
+pub fn update_entity_properties(
+    repo: &dyn GraphRepository,
+    id: &str,
+    updates: HashMap<String, PropertyValue>,
+    cope_version: Option<&str>,
+) -> Result<Node, String> {
+    let entity = find_entity_any(repo, id)
+        .ok_or_else(|| format!("实体 '{}' 未找到", id))?;
+
+    // 副本保护：原实体（cope_version 为空）先克隆再修改
+    let target_code = if let Some(ver) = cope_version {
+        let current_ver = entity
+            .property("cope_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if current_ver.is_empty() {
+            // 原实体 → 克隆副本，在副本上修改
+            ensure_cope_version(repo, &entity, ver)?
+        } else {
+            // 已是副本 → 直接修改
+            entity
+                .property("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or(id)
+                .to_string()
+        }
+    } else {
+        entity
+            .property("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or(id)
+            .to_string()
+    };
+
+    // 重新读取目标实体（可能是刚克隆的副本）
+    let target = find_entity_any(repo, &target_code)
+        .ok_or_else(|| format!("目标实体 '{}' 未找到", target_code))?;
+
+    let code = target
+        .property("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&target_code);
+
+    let mut new_props = target.properties.clone();
+    for (key, val) in &updates {
+        new_props.insert(key.clone(), val.clone());
+    }
+
+    // 删除旧节点 → 写入更新后的节点
+    repo.delete_node(code)
+        .map_err(|e| format!("删除原实体失败: {}", e))?;
+    let updated = Node::new(target.labels, new_props);
+    repo.insert_node(&updated)
+        .map_err(|e| format!("写入更新实体失败: {}", e))?;
+
+    Ok(updated)
 }
 
 /// 截断字符串到指定最大长度，超出部分用 `...` 替代。

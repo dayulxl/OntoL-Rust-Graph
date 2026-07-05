@@ -1,6 +1,7 @@
 //! HTTP 服务器 — 路由分发。
 //!
-//! 使用 `tiny_http` 实现单线程事件循环。
+//! 使用 `tiny_http` 作为 HTTP 层，每个请求在独立线程中处理，
+//! 避免 AuraDB Bolt 慢查询阻塞其他请求。
 
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +11,7 @@ use crate::app::AppState;
 use crate::config::ServerConfig;
 use crate::routes;
 
-/// 启动 HTTP 服务器（阻塞式事件循环）
+/// 启动 HTTP 服务器（每个请求独立线程，避免慢查询阻塞）
 pub fn start(config: ServerConfig, state: Arc<Mutex<AppState>>) {
     let addr = format!("0.0.0.0:{}", config.port);
     let server = match Server::http(&addr) {
@@ -37,29 +38,33 @@ pub fn start(config: ServerConfig, state: Arc<Mutex<AppState>>) {
     println!("   POST http://localhost:{}/tools/call", config.port);
     println!("   GET|POST http://localhost:{}/rules", config.port);
     println!("   POST http://localhost:{}/infer-forward", config.port);
+    println!("   POST http://localhost:{}/entity/update", config.port);
     println!();
 
+    // 每个请求独立线程处理，Bolt 慢查询不会阻塞健康检查等其他请求
     for mut request in server.incoming_requests() {
+        let state = Arc::clone(&state);
         let url = request.url().to_string();
         let method_str = request.method().to_string();
-        let state = Arc::clone(&state);
 
-        let (status, body) = dispatch(&method_str, &url, &mut request, &state);
+        std::thread::spawn(move || {
+            let (status, body) = dispatch(&method_str, &url, &mut request, &state);
 
-        let content_type = if body.trim_start().starts_with('{') || body.trim_start().starts_with('[') {
-            "application/json; charset=utf-8"
-        } else {
-            "text/plain; charset=utf-8"
-        };
+            let content_type = if body.trim_start().starts_with('{') || body.trim_start().starts_with('[') {
+                "application/json; charset=utf-8"
+            } else {
+                "text/plain; charset=utf-8"
+            };
 
-        let response = tiny_http::Response::from_string(&body)
-            .with_status_code(status)
-            .with_header(Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap())
-            .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let response = tiny_http::Response::from_string(&body)
+                .with_status_code(status)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
 
-        if let Err(e) = request.respond(response) {
-            eprintln!("Response error: {}", e);
-        }
+            if let Err(e) = request.respond(response) {
+                eprintln!("Response error: {}", e);
+            }
+        });
     }
 }
 
@@ -106,12 +111,13 @@ fn dispatch(
             "/ontology/create" => return routes::ontology_create::handle(request, state),
             "/relationships/create" => return routes::ontology_relationship::handle(request, state),
             "/infer-forward" => return routes::infer::handle(request, state),
+            "/entity/update" => return routes::entity_update::handle(request, state),
             "/tools/call" => return routes::tools_call::handle(request, state),
             _ => {}
         }
     }
 
-    let known = ["/health", "/tools", "/schema", "/query", "/reason", "/context", "/patrol", "/strike", "/confidence/policy", "/nl-query", "/ontology/create", "/relationships/create", "/rules", "/tools/call", "/infer-forward"];
+    let known = ["/health", "/tools", "/schema", "/query", "/reason", "/context", "/patrol", "/strike", "/confidence/policy", "/nl-query", "/ontology/create", "/relationships/create", "/rules", "/tools/call", "/infer-forward", "/entity/update"];
     if known.contains(&path) {
         let allowed = if matches!(path, "/health" | "/tools" | "/schema" | "/rules") { "GET" } else { "POST" };
         return (405, json_error(format!("Method not allowed. Use {}.", allowed)));

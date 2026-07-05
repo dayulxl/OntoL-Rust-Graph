@@ -10,8 +10,9 @@ ontology-reasoner = { path = "../ontology-reasoner" }
 tiny_http = "0.12"
 serde_json = "1"
 log = "0.4"
+dotenvy = "0.15"
 
 [features]
-default = ["neo4j"]
+default = ["memgraph", "in-memory"]
 in-memory = ["ontology-storage/in-memory"]
-neo4j = ["ontology-storage/neo4j"]
+memgraph = ["ontology-storage/memgraph"]

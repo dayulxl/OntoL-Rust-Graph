@@ -10,9 +10,9 @@ ontology-storage = { path = "crates/ontology-storage" }
 ontology-reasoner = { path = "crates/ontology-reasoner" }
 
 [features]
-default = ["neo4j"]
+default = ["memgraph", "in-memory"]
 in-memory = ["ontology-storage/in-memory"]
-neo4j = ["ontology-storage/neo4j"]
+memgraph = ["ontology-storage/memgraph"]
 
 [workspace]
 members = ["crates/ontology-storage", "crates/ontology-reasoner", "crates/ontology-server"]

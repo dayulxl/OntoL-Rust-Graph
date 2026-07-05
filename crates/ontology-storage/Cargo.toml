@@ -2,19 +2,17 @@
 name = "ontology-storage"
 version = "0.1.0"
 edition = "2024"
-description = "Ontology storage layer — abstract property-graph repository with Neo4j and in-memory backends"
-
-# All external dependencies are optional and gated behind features.
-# The default feature (in-memory) uses only Rust std.
+description = "Ontology storage layer — abstract property-graph repository with Memgraph and in-memory backends"
 
 [dependencies]
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
-ureq = { version = "3", optional = true }
+neo4rs = { version = "0.8", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros"] }
 log = "0.4"
 
 [features]
-default = ["in-memory"]
+default = ["memgraph"]
 in-memory = []
-neo4j = ["dep:ureq", "dep:serde", "dep:serde_json"]
+memgraph = ["dep:neo4rs", "dep:tokio", "dep:serde", "dep:serde_json"]
 llm = ["dep:serde", "dep:serde_json"]

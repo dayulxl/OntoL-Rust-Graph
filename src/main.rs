@@ -1,12 +1,12 @@
 //! 本体推理引擎 — 端到端演示。
 //!
-//! 默认连接 Neo4j 后端（通过环境变量配置），可切换为内存后端。
+//! 默认连接 Memgraph 后端（通过环境变量配置），可切换为内存后端。
 //!
 //! 运行：
-//!   cargo run                                                            # Neo4j 后端（默认）
+//!   cargo run                                                            # Memgraph 后端（默认）
 //!   cargo run --no-default-features --features in-memory                 # 内存后端
 //!
-//! 环境变量：ONTOLOGY_NEO4J_URI / ONTOLOGY_NEO4J_USER / ONTOLOGY_NEO4J_PASSWORD
+//! 环境变量：ONTOLOGY_GRAPH_URI / ONTOLOGY_GRAPH_USER / ONTOLOGY_GRAPH_PASSWORD
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,31 +20,31 @@ use ontology_reasoner::ReasonerBuilder;
 
 /// 选择后端并返回 Arc<dyn GraphRepository>
 ///
-/// Neo4j 连接参数从环境变量读取（与 ontology-server 一致）：
-///   ONTOLOGY_NEO4J_URI      默认 http://localhost:7474
-///   ONTOLOGY_NEO4J_USER     默认 neo4j
-///   ONTOLOGY_NEO4J_PASSWORD 默认 12345678
+/// Memgraph 连接参数从环境变量读取（与 ontology-server 一致）：
+///   ONTOLOGY_GRAPH_URI      默认 memgraph://localhost:7687
+///   ONTOLOGY_GRAPH_USER     默认空
+///   ONTOLOGY_GRAPH_PASSWORD 默认空
 fn create_repo() -> Result<SharedRepository, Box<dyn std::error::Error>> {
-    #[cfg(feature = "neo4j")]
+    #[cfg(feature = "memgraph")]
     {
-        let uri = std::env::var("ONTOLOGY_NEO4J_URI")
-            .unwrap_or_else(|_| "http://localhost:7474".into());
-        let user = std::env::var("ONTOLOGY_NEO4J_USER")
-            .unwrap_or_else(|_| "neo4j".into());
-        let password = std::env::var("ONTOLOGY_NEO4J_PASSWORD")
-            .unwrap_or_else(|_| "12345678".into());
+        let uri = std::env::var("ONTOLOGY_GRAPH_URI")
+            .unwrap_or_else(|_| "memgraph://localhost:7687".into());
+        let user = std::env::var("ONTOLOGY_GRAPH_USER")
+            .unwrap_or_default();
+        let password = std::env::var("ONTOLOGY_GRAPH_PASSWORD")
+            .unwrap_or_default();
 
-        println!("🔌 连接 Neo4j ({} @ {})...", user, uri);
-        let adapter = ontology_storage::adapters::neo4j::Neo4jAdapter::connect(
+        println!("🔌 连接 Memgraph ({} @ {})...", user, uri);
+        let adapter = ontology_storage::adapters::memgraph::MemgraphAdapter::connect(
             &uri, &user, &password,
         )?;
-        println!("   ✅ Neo4j 连接成功\n");
+        println!("   ✅ Memgraph 连接成功\n");
         return Ok(Arc::new(adapter));
     }
 
-    #[cfg(not(feature = "neo4j"))]
+    #[cfg(not(feature = "memgraph"))]
     {
-        println!("💾 使用内存后端 (--features neo4j 可切换 Neo4j)");
+        println!("💾 使用内存后端");
         let adapter = ontology_storage::adapters::in_memory::executor::InMemoryAdapter::new();
         return Ok(Arc::new(adapter));
     }
@@ -167,8 +167,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 验证推理结果:");
 
     for (name, iri) in &[("Alice", "http://ex#Alice"), ("Eve", "http://ex#Eve")] {
-        // 需要通过 repo 查询，但 repo 已被 move 到 reasoner 中
-        // 用 reasoner 的 DWL2 DL 查询替代
         let expr = ontology_reasoner::ClassExpression::some(
             "hasUncle",
             ontology_reasoner::ClassExpression::class("http://ex#Person"),

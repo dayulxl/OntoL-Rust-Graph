@@ -38,6 +38,8 @@ pub mod util;
 pub use detector::{DefaultStateChangeDetector, StateChangeDetector};
 pub use explorer::{Direction, ExploreConfig, ExploreHop, ExploreResult, GraphExplorer};
 pub use util::{
-    find_entity_any, find_incoming_relationships, find_matching_rules, get_type_ancestors,
-    predict_next_steps, prop_as_f64, summarize_relations, truncate_str, RelCount, RuleMatch,
+    clone_all_for_version, delete_by_cope_version, ensure_cope_version,
+    find_entity_any, find_entity_by_id_code, find_incoming_relationships, find_matching_rules,
+    get_type_ancestors, predict_next_steps, prop_as_f64, summarize_relations, truncate_str,
+    update_entity_properties, RelCount, RuleMatch,
 };

@@ -75,17 +75,26 @@ pub fn handle(
 
     for req in &requests {
         let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let code = req.get("code").and_then(|v| v.as_str());
         let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let relation = req.get("relation").and_then(|v| v.as_str()).unwrap_or("");
 
-        if id.is_empty() {
-            results.push(serde_json::json!({"error": "Missing required field: id"}));
+        if id.is_empty() && code.is_none() {
+            results.push(serde_json::json!({"error": "至少需要 'id' 或 'code' 之一"}));
             continue;
         }
         if relation.is_empty() {
             results.push(serde_json::json!({"error": "Missing required field: relation"}));
             continue;
         }
+
+        let cope_version = match req.get("cope_version").and_then(|v| v.as_str()) {
+            Some(cv) => cv.to_string(),
+            None => {
+                results.push(serde_json::json!({"error": "Missing required field: cope_version"}));
+                continue;
+            }
+        };
 
         let name = if name.is_empty() { "推理任务" } else { name };
         let depth = req.get("depth").and_then(|v| v.as_u64()).unwrap_or(3).min(5) as usize;
@@ -94,10 +103,12 @@ pub fn handle(
 
         let config = ExploreConfig {
             start_id: id.to_string(),
+            start_code: code.map(|s| s.to_string()),
             relation: relation.to_string(),
             max_depth: depth,
             direction: Direction::from_str(direction),
             confidence_threshold,
+            cope_version: Some(cope_version),
         };
 
         let threshold = config.confidence_threshold;

@@ -117,13 +117,23 @@ impl SwrlEngine {
 
             let mut round_derived = 0usize;
 
-            for rule in rules {
+            // ── 并发推理阶段：每条规则只读 repo，并行匹配前提 ──
+            let parallel_results = std::thread::scope(|s| {
+                let mut handles = Vec::new();
+                for rule in rules {
+                    handles.push(s.spawn(|| self.execute_rule(rule)));
+                }
+                handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+            });
+
+            // ── 串行写入阶段：去重 + 写入图（避免并发写冲突）──
+            for (ri, rule) in rules.iter().enumerate() {
                 let rule_name = rule.name.as_deref().unwrap_or("<anonymous>");
                 let rule_start = Instant::now();
 
-                match self.execute_rule(rule) {
+                match &parallel_results[ri] {
                     Ok(step_results) => {
-                        for sr in &step_results {
+                        for sr in step_results {
                             let new_count = self.insert_derived_facts(&sr.derived_facts)?;
                             stats.total_derived += new_count;
                             round_derived += new_count;
@@ -165,7 +175,7 @@ impl SwrlEngine {
                         }
                         continue;
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(ReasonerError::SwrlExecution(format!("{}", e))),
                 }
             }
 

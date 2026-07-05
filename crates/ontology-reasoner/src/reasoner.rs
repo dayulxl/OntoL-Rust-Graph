@@ -243,6 +243,39 @@ impl Reasoner {
             engine.update_policy(self.policy.clone());
         }
     }
+
+    /// 执行图中所有 Entity 的行为动作。
+    ///
+    /// 扫描 Entity 节点，解析 precondition/effect/cost/duration/priority/composedOf
+    /// 六个行为字段，按优先级执行。precondition 满足时触发 effect，composedOf 递归。
+    ///
+    /// # 参数
+    ///
+    /// - `max_depth` — composedOf 递归最大深度（0 表示不递归）
+    pub fn execute_behaviors(&mut self, max_depth: usize) -> Result<Vec<crate::swrl::behavior::BehaviorResult>, ReasonerError> {
+        use crate::swrl::behavior;
+
+        let entities = self.repo.get_nodes_by_label("Entity")
+            .map_err(|e| ReasonerError::SwrlExecution(format!("查询 Entity 失败: {}", e)))?;
+
+        if entities.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let engine = self.swrl_engine.get_or_insert_with(|| {
+            crate::swrl::engine::SwrlEngine::new(Arc::clone(&self.repo))
+                .with_max_iterations(self.config.max_iterations)
+                .with_verbose(self.config.verbose)
+                .with_policy(self.policy.clone())
+        });
+
+        Ok(behavior::execute_behaviors_batch(
+            self.repo.as_ref(),
+            &entities,
+            engine,
+            max_depth,
+        ))
+    }
 }
 
 // ═══════════════════════════════════════════════════════════

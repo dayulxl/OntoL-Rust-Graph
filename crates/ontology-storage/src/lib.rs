@@ -6,13 +6,13 @@
 //!
 //! - **`repository`**  — 业务依赖的 Trait 抽象（`GraphRepository`, `Transaction`）
 //! - **`mapper`**      — 核心转换层：本体模型 ↔ 属性图 ↔ Cypher 方言
-//! - **`adapters`**    — 适配器实现：`neo4j` / `in_memory`
+//! - **`adapters`**    — 适配器实现：`memgraph` / `in_memory`
 //! - **`factory`**     — 运行时工厂，根据配置返回 `Arc<dyn GraphRepository>`
 //!
 //! ## Feature flags
 //!
-//! - `in-memory` (默认) — 启用内存属性图存储
-//! - `neo4j`            — 启用 Neo4j 后端适配器
+//! - `memgraph` (默认) — 启用 Memgraph 后端适配器（主力）
+//! - `in-memory`       — 启用内存属性图存储（测试用）
 
 pub mod error;
 pub mod factory;
@@ -20,7 +20,7 @@ pub mod mapper;
 pub mod repository;
 pub mod adapters;
 
-#[cfg(any(feature = "neo4j", feature = "llm"))]
+#[cfg(any(feature = "memgraph", feature = "llm"))]
 pub mod ontology;
 
 pub use error::{GraphError, MappingError, StoreError};

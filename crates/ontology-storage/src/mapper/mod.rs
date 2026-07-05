@@ -22,8 +22,5 @@ pub mod model_mapper;
 pub mod property_converter;
 pub mod graph;
 
-#[cfg(feature = "neo4j")]
-pub mod cypher;
-
 #[cfg(feature = "llm")]
 pub mod llm;
