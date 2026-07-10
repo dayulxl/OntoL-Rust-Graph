@@ -403,6 +403,7 @@ SWRL 规则执行分为两阶段：
 | ADR-005 | SWRL 规则并发执行（thread::scope） | 2026-07-05 | 生效中 |
 | ADR-006 | 场景版本隔离：全量克隆+副本守卫，不修改原数据 | 2026-07-05 | 生效中 |
 | ADR-007 | 统一映射层：W3C OWL2→属性图 SSOT，收拢~150处分散硬编码 | 2026-07-10 | 生效中 |
+| ADR-008 | 图节点与边的全局唯一 ID 采用雪花算法（Snowflake ID），纯数字 i64，64-bit | 2026-07-10 | 生效中 |
 
 ## 8.1 统一映射层 (unified_mapping)
 
@@ -453,8 +454,202 @@ let cat    = categorize_property_key("label");     // Some(Annotation)
 
 ---
 
-## 11. 附录：参考文档
+## 11. 图数据库 ID 设计标准 — 雪花算法 (Snowflake ID)
+
+> **核心原则**：图数据库中所有节点和边的唯一标识符统一使用雪花算法生成 **64-bit 纯数字**（`i64`）。
+> 禁止使用数据库自增 ID、随机 UUID、字符串包装、hex 编码或无协调的自定义序列方案。
+
+### 11.1 为什么是雪花算法？
+
+| 对比维度 | 雪花算法 | UUID v4 | 数据库自增 | 纳秒时间戳 |
+|----------|----------|---------|------------|------------|
+| 全局唯一 | ✅ 是 | ✅ 是 | ❌ 单机唯一 | ❌ 并发冲突 |
+| 趋势递增 | ✅ 时间序 | ❌ 随机（B+树分裂严重） | ✅ 递增 | ✅ 递增 |
+| 分布式友好 | ✅ 无需协调 | ✅ 无需协调 | ❌ 需要全局锁 | ❌ 需要全局时钟 |
+| 存储效率 | ✅ 64-bit (8B) | ❌ 128-bit (16B) | ⚠️ 取决于类型 | ⚠️ 64-bit |
+| 可读性 | ⚠️ i64 数值 | ❌ 无意义 hex | ✅ 简单 | ❌ 大数值 |
+| 图数据库适配 | ✅ 属性图天然适合 | ⚠️ 索引膨胀 | ❌ 分布式图不可用 | ❌ 时钟漂移风险 |
+
+> 雪花算法由 Twitter 于 2012 年提出，是分布式系统 ID 生成的事实标准。
+
+### 11.2 位布局 (64-bit)
+
+```
+┌─┬─────────────────────────────────────────────┬────────────────────┬──────────────────────┐
+│0│              41-bit 时间戳 (ms)              │   10-bit 节点 ID    │   12-bit 序列号       │
+└─┴─────────────────────────────────────────────┴────────────────────┴──────────────────────┘
+ 63  62                                      22  21                12  11                  0
+```
+
+| 字段 | 位数 | 范围 | 说明 |
+|------|------|------|------|
+| 保留位 | 1 bit | 固定为 0 | 保证 ID 为正整数（i64 兼容） |
+| 时间戳 | 41 bits | 0 ~ 2^41-1 | 相对自定义 Epoch 的毫秒偏移，可用 ~69 年 |
+| 节点 ID | 10 bits | 0 ~ 1023 | 机器/进程/worker 标识，支持 1024 个节点并发 |
+| 序列号 | 12 bits | 0 ~ 4095 | 同毫秒内自增，单节点每秒最多 409.6 万 ID |
+
+### 11.3 Rust 参考实现
+
+```rust
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 自定义 Epoch：2026-01-01 00:00:00 UTC（毫秒）
+pub const SNOWFLAKE_EPOCH_MS: i64 = 1_767_225_600_000;
+
+const NODE_ID_BITS: i64 = 10;
+const SEQUENCE_BITS: i64 = 12;
+const MAX_NODE_ID: i64 = (1 << NODE_ID_BITS) - 1;     // 1023
+const MAX_SEQUENCE: i64 = (1 << SEQUENCE_BITS) - 1;   // 4095
+const TIMESTAMP_SHIFT: i64 = NODE_ID_BITS + SEQUENCE_BITS; // 22
+const NODE_ID_SHIFT: i64 = SEQUENCE_BITS;              // 12
+
+pub struct SnowflakeIdGenerator {
+    node_id: i64,
+    last_timestamp: AtomicI64,
+    sequence: AtomicU64,   // u64 避免 AtomicI64 的负数回绕
+}
+
+impl SnowflakeIdGenerator {
+    /// 创建生成器。`node_id` 必须在 0..=1023 范围内。
+    pub fn new(node_id: i64) -> Result<Self, anyhow::Error> {
+        anyhow::ensure!(
+            (0..=MAX_NODE_ID).contains(&node_id),
+            "node_id 超出范围 [0, {MAX_NODE_ID}]，当前值: {node_id}"
+        );
+        Ok(Self {
+            node_id,
+            last_timestamp: AtomicI64::new(0),
+            sequence: AtomicU64::new(0),
+        })
+    }
+
+    /// 生成下一个雪花 ID，返回 i64（图数据库属性兼容）。
+    pub fn next_id(&self) -> i64 {
+        loop {
+            let now = current_epoch_ms();
+            let last = self.last_timestamp.load(Ordering::Acquire);
+
+            if now == last {
+                // 同毫秒内：序列号自增
+                let seq = self.sequence.fetch_add(1, Ordering::Relaxed) as i64;
+                if seq <= MAX_SEQUENCE {
+                    return self.compose(now, seq);
+                }
+                // 序列号耗尽：自旋等待下一毫秒
+                while current_epoch_ms() <= last {
+                    std::hint::spin_loop();
+                }
+                // 进入下一毫秒，重置序列号（由下一轮 last_timestamp 更新触发）
+            } else {
+                // 新毫秒：尝试 CAS 更新时间戳并重置序列号
+                if self
+                    .last_timestamp
+                    .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.sequence.store(0, Ordering::Release);
+                    return self.compose(now, 0);
+                }
+                // CAS 失败，重试
+            }
+        }
+    }
+
+    fn compose(&self, timestamp: i64, sequence: i64) -> i64 {
+        (timestamp << TIMESTAMP_SHIFT)
+            | (self.node_id << NODE_ID_SHIFT)
+            | sequence
+    }
+
+    /// 从 ID 中反向解析各字段（调试/审计用）。
+    pub fn decompose(id: i64) -> (i64, i64, i64) {
+        let timestamp = (id >> TIMESTAMP_SHIFT) & ((1 << 41) - 1);
+        let node_id = (id >> NODE_ID_SHIFT) & MAX_NODE_ID;
+        let sequence = id & MAX_SEQUENCE;
+        (timestamp, node_id, sequence)
+    }
+}
+
+fn current_epoch_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+        - SNOWFLAKE_EPOCH_MS
+}
+```
+
+### 11.4 图中节点与边的 ID 约定
+
+| 图元素 | ID 字段 | 类型 | 生成策略 |
+|--------|---------|------|----------|
+| 节点 (Node) | `snowflake_id` (属性) | **纯数字 `i64`** | 创建时由 `SnowflakeIdGenerator` 生成 |
+| 边 (Relationship) | `snowflake_id` (属性) | **纯数字 `i64`** | 创建时由 `SnowflakeIdGenerator` 生成 |
+
+> **重要**：`snowflake_id` 是图中节点和边的**主键标识**。已有的 `code`、`iri`、`id` 等业务标识字段继续保留作为业务查找键，
+> 但它们不再是唯一标识符。所有内部遍历、索引、关系引用统一使用 `snowflake_id`。
+
+### 11.5 工程约束
+
+1. **单例生成器**：每个进程只创建一个 `SnowflakeIdGenerator` 实例（通过 `lazy_static!` 或 `OnceCell`），保证同进程内 ID 唯一
+2. **node_id 分配**：多实例部署时，每个实例通过环境变量 `SNOWFLAKE_NODE_ID` 配置不同的 `node_id`（0-1023），避免跨实例碰撞
+3. **索引**：Memgraph/Neo4j 中 `snowflake_id` 属性必须建立索引（`CREATE INDEX ON :Entity(snowflake_id)` 等所有标签）
+4. **类型强制**：`snowflake_id` 在内存、数据库、序列化全链路统一为 **纯数字 `i64`**（64-bit signed integer）。禁止在任何环节转为 `String`、hex、base64 或带前缀的字符串（如 `"sf_748291..."`）。API 响应中直接输出 JSON number：`{"snowflake_id": 748291234567890123}`，不得输出 `{"snowflake_id": "748291234567890123"}`
+5. **禁用场景**：`snowflake_id` 不作为业务排序依据（时间序只是趋势，不严格保证）；需要精确时序的场景使用独立的 `created_at` 时间戳字段
+
+### 11.6 与现有 `code`/`iri` 的共存
+
+```
+现有模型                              新增后模型
+┌──────────────────────┐      ┌──────────────────────────────┐
+│ Entity 节点           │      │ Entity 节点                   │
+│  • code: "P8A_001"   │  →   │  • snowflake_id: 748291...   │ ← 主键（雪花 ID）
+│  • iri: "#P8A_001"   │      │  • code: "P8A_001"           │ ← 业务键（保留）
+│  • label: "歼-20"    │      │  • iri: "#P8A_001"           │ ← 语义标识（保留）
+└──────────────────────┘      │  • label: "歼-20"            │ ← 展示名（保留）
+                              └──────────────────────────────┘
+
+关系查询迁移：
+  OLD: MATCH (n {code: "P8A_001"})-[r]->(m {code: "YJ-12"})
+  NEW: MATCH (n {snowflake_id: 748291...})-[r]->(m {snowflake_id: 932145...})
+  
+  // code 仍用于面向用户的查找：
+  MATCH (n {code: "P8A_001"})  // 返回 snowflake_id + 所有属性
+```
+
+### 11.7 跨实例部署拓扑
+
+```
+                    ┌──────────────────┐
+                    │   Load Balancer   │
+                    └──┬──────────┬──┬──┘
+                       │          │  │
+          ┌────────────▼──┐  ┌───▼──────────┐
+          │ App Instance  │  │ App Instance  │  ...
+          │ node_id = 0   │  │ node_id = 1   │
+          │ generator ────│  │ generator ────│
+          │ snowflake IDs │  │ snowflake IDs │
+          └──────┬────────┘  └──┬────────────┘
+                 │              │
+          ┌──────▼──────────────▼──────┐
+          │       Memgraph 集群         │
+          │  (snowflake_id 全局唯一)    │
+          └────────────────────────────┘
+
+配置方式：
+  .env:
+    SNOWFLAKE_NODE_ID=0    # 每个实例不同，0-1023
+
+  Docker:
+    docker run -e SNOWFLAKE_NODE_ID=0 ...
+```
+
+---
+
+## 12. 附录：参考文档
 
 - [Rust 官方编码规范](https://doc.rust-lang.org/1.0.0/style/)
 - [Rust API 设计指南](https://rust-lang.github.io/api-guidelines/)
 - [CMMI 5 级过程域概览](https://cmmiinstitute.com/cmmi/dev)
+- [Twitter Snowflake ID 原始公告](https://blog.twitter.com/engineering/en_us/a/2010/announcing-snowflake)
