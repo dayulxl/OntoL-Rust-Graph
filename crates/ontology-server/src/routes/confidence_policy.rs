@@ -6,15 +6,13 @@
 //!
 //! 可选: `threshold` 自定义阈值覆盖
 
-use std::sync::{Arc, Mutex};
-use ontology_reasoner::{ConfidencePolicy, OperationMode};
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
+use ontology_reasoner::{ConfidencePolicy, OperationMode};
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
-pub fn handle(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -24,13 +22,24 @@ pub fn handle(
         Err(e) => return (400, json_error(format!("Invalid JSON: {}", e))),
     };
 
-    let mut app = match state.lock() { Ok(a) => a, Err(e) => return (500, json_error(e.to_string())) };
+    let mut app = match state.lock() {
+        Ok(a) => a,
+        Err(e) => return (500, json_error(e.to_string())),
+    };
 
     // 切换模式
     if let Some(mode_str) = q.get("mode").and_then(|v| v.as_str()) {
         match OperationMode::from_str(mode_str) {
-            Some(mode) => app.reasoner.switch_policy_mode(mode),
-            None => return (400, json_error(format!("Unknown mode: {}. Use: WarFighting, Training, Exercise", mode_str))),
+            Ok(mode) => app.reasoner.switch_policy_mode(mode),
+            Err(_) => {
+                return (
+                    400,
+                    json_error(format!(
+                        "Unknown mode: {}. Use: WarFighting, Training, Exercise",
+                        mode_str
+                    )),
+                );
+            }
         }
     }
 

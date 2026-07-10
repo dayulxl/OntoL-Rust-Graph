@@ -24,26 +24,22 @@
 
 use std::sync::{Arc, Mutex};
 
-use ontology_storage::mapper::graph::node::Node;
-use ontology_storage::mapper::graph::property::PropertyValue;
 use ontology_reasoner::graph::{
-    Direction, ExploreConfig, ExploreHop, ExploreResult, GraphExplorer,
-    StateChangeDetector,
+    Direction, ExploreConfig, ExploreHop, ExploreResult, GraphExplorer, StateChangeDetector,
     prop_as_f64, truncate_str,
 };
 use ontology_reasoner::spatial::haversine_m;
+use ontology_storage::mapper::graph::node::Node;
+use ontology_storage::mapper::graph::property::PropertyValue;
 
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
 
 // ═══════════════════════════════════════════════════════════
 // HTTP 入口
 // ═══════════════════════════════════════════════════════════
 
-pub fn handle(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -96,9 +92,20 @@ pub fn handle(
             }
         };
 
-        let name = if name.is_empty() { "推理任务" } else { name };
-        let depth = req.get("depth").and_then(|v| v.as_u64()).unwrap_or(3).min(5) as usize;
-        let direction = req.get("direction").and_then(|v| v.as_str()).unwrap_or("outgoing");
+        let name = if name.is_empty() {
+            "推理任务"
+        } else {
+            name
+        };
+        let depth = req
+            .get("depth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3)
+            .min(5) as usize;
+        let direction = req
+            .get("direction")
+            .and_then(|v| v.as_str())
+            .unwrap_or("outgoing");
         let confidence_threshold = req.get("confidence_threshold").and_then(|v| v.as_f64());
 
         let config = ExploreConfig {
@@ -106,7 +113,7 @@ pub fn handle(
             start_code: code.map(|s| s.to_string()),
             relation: relation.to_string(),
             max_depth: depth,
-            direction: Direction::from_str(direction),
+            direction: direction.parse::<Direction>().unwrap_or_default(),
             confidence_threshold,
             cope_version: Some(cope_version),
         };
@@ -124,7 +131,10 @@ pub fn handle(
         }
     }
 
-    (200, serde_json::json!({ "ok": true, "count": results.len(), "results": results }).to_string())
+    (
+        200,
+        serde_json::json!({ "ok": true, "count": results.len(), "results": results }).to_string(),
+    )
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -145,17 +155,26 @@ fn build_response(
 
     let state_change_count: usize = chain_json
         .iter()
-        .map(|h| h["inferred"]["state_changes"].as_array().map(|a| a.len()).unwrap_or(0))
+        .map(|h| {
+            h["inferred"]["state_changes"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
         .sum();
     let rule_match_count: usize = chain_json
         .iter()
-        .map(|h| h["inferred"]["matching_rules"].as_array().map(|a| a.len()).unwrap_or(0))
+        .map(|h| {
+            h["inferred"]["matching_rules"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
         .sum();
 
     // 置信度统计
     let stopped_count = result.chain.iter().filter(|h| h.stop_propagation).count();
-    let with_conf: Vec<f64> = result.chain.iter()
-        .filter_map(|h| h.confidence).collect();
+    let with_conf: Vec<f64> = result.chain.iter().filter_map(|h| h.confidence).collect();
     let avg_confidence = if with_conf.is_empty() {
         None
     } else {
@@ -199,11 +218,16 @@ fn build_response(
 
     let summary = format!(
         "{}: 实体 '{}' 沿 '{}' 关系 {} 方向遍历 {} 跳, 访问 {} 个新节点, 发现 {} 条状态变化, {} 条匹配规则。有置信度数据的节点平均: {}, 因低于阈值停止传播: {} 处。检测器: {}。",
-        name, entity_code, result.relation, result.direction.as_str(),
+        name,
+        entity_code,
+        result.relation,
+        result.direction.as_str(),
         chain_json.len(),
         result.chain.len(),
-        state_change_count, rule_match_count,
-        avg_str, stopped_count,
+        state_change_count,
+        rule_match_count,
+        avg_str,
+        stopped_count,
         detector.name(),
     );
 
@@ -351,43 +375,53 @@ impl StateChangeDetector for MilitaryStateChangeDetector {
         }
 
         // ── 状态变化 ──
-        let src_status = src.property("status").and_then(|v| v.as_str()).unwrap_or("");
-        let tgt_status = tgt.property("status").and_then(|v| v.as_str()).unwrap_or("");
+        let src_status = src
+            .property("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let tgt_status = tgt
+            .property("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if !src_status.is_empty() && !tgt_status.is_empty() && src_status != tgt_status {
             changes.push(format!("🔀 状态转变: '{}' → '{}'", src_status, tgt_status));
         }
 
         // ── 速度变化 ──
-        if let (Some(ss), Some(ts)) =
-            (prop_as_f64(src.property("speed")), prop_as_f64(tgt.property("speed")))
+        if let (Some(ss), Some(ts)) = (
+            prop_as_f64(src.property("speed")),
+            prop_as_f64(tgt.property("speed")),
+        ) && (ss - ts).abs() > 0.01
         {
-            if (ss - ts).abs() > 0.01 {
-                changes.push(format!(
-                    "🏃 速度变化: {:.1} → {:.1} m/s (Δ{:.1})",
-                    ss,
-                    ts,
-                    ts - ss
-                ));
-            }
+            changes.push(format!(
+                "🏃 速度变化: {:.1} → {:.1} m/s (Δ{:.1})",
+                ss,
+                ts,
+                ts - ss
+            ));
         }
 
         // ── 功率变化 ──
-        if let (Some(sp), Some(tp)) =
-            (prop_as_f64(src.property("power")), prop_as_f64(tgt.property("power")))
+        if let (Some(sp), Some(tp)) = (
+            prop_as_f64(src.property("power")),
+            prop_as_f64(tgt.property("power")),
+        ) && (sp - tp).abs() > 0.01
         {
-            if (sp - tp).abs() > 0.01 {
-                changes.push(format!("⚡ 功率变化: {:.1} → {:.1} (Δ{:.1})", sp, tp, tp - sp));
-            }
+            changes.push(format!(
+                "⚡ 功率变化: {:.1} → {:.1} (Δ{:.1})",
+                sp,
+                tp,
+                tp - sp
+            ));
         }
 
         // ── 置信度变化 ──
         if let (Some(sc), Some(tc)) = (
             prop_as_f64(src.property("confidence")),
             prop_as_f64(tgt.property("confidence")),
-        ) {
-            if (sc - tc).abs() > 0.001 {
-                changes.push(format!("🎯 置信度变化: {:.2} → {:.2}", sc, tc));
-            }
+        ) && (sc - tc).abs() > 0.001
+        {
+            changes.push(format!("🎯 置信度变化: {:.2} → {:.2}", sc, tc));
         }
 
         // ── composedOf 传递 ──
@@ -421,10 +455,7 @@ impl StateChangeDetector for MilitaryStateChangeDetector {
                 }
             }
             "打击" | "strike" | "strikes" => {
-                changes.push(format!(
-                    "💥 实体 {} 对 {} 发起打击关系",
-                    src_code, tgt_code
-                ));
+                changes.push(format!("💥 实体 {} 对 {} 发起打击关系", src_code, tgt_code));
             }
             "子动作" | "subAction" | "composedOf" => {
                 changes.push(format!(
@@ -434,10 +465,7 @@ impl StateChangeDetector for MilitaryStateChangeDetector {
             }
             _ => {
                 if !src_code.is_empty() && !tgt_code.is_empty() {
-                    changes.push(format!(
-                        "🔗 {} -[{}]-> {}",
-                        src_code, relation, tgt_code
-                    ));
+                    changes.push(format!("🔗 {} -[{}]-> {}", src_code, relation, tgt_code));
                 }
             }
         }

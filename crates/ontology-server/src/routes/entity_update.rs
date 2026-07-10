@@ -9,16 +9,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use ontology_storage::PropertyValue;
 use ontology_reasoner::update_entity_properties;
+use ontology_storage::PropertyValue;
 
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
 
-pub fn handle(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -106,16 +103,18 @@ fn prop_to_json(v: &PropertyValue) -> serde_json::Value {
     match v {
         PropertyValue::String(s) => serde_json::Value::String(s.clone()),
         PropertyValue::Integer(i) => serde_json::Number::from(*i).into(),
-        PropertyValue::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        PropertyValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
-        PropertyValue::List(arr) => serde_json::Value::Array(arr.iter().map(prop_to_json).collect()),
-        PropertyValue::Map(m) => {
-            serde_json::Value::Object(m.iter().map(|(k, v)| (k.clone(), prop_to_json(v))).collect())
+        PropertyValue::List(arr) => {
+            serde_json::Value::Array(arr.iter().map(prop_to_json).collect())
         }
+        PropertyValue::Map(m) => serde_json::Value::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), prop_to_json(v)))
+                .collect(),
+        ),
         PropertyValue::Null => serde_json::Value::Null,
     }
 }

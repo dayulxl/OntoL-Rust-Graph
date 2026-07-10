@@ -6,12 +6,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use ontology_reasoner::timeline::{TimelineEngine, TimelineInput, WaypointInput};
 use ontology_storage::mapper::graph::node::Node;
 use ontology_storage::mapper::graph::property::PropertyValue;
-use ontology_reasoner::timeline::{TimelineEngine, TimelineInput, WaypointInput};
+use ontology_storage::mapper::unified_mapping;
 
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
 
 macro_rules! logf {
     ($file:expr, $($arg:tt)*) => {{
@@ -40,19 +41,29 @@ pub fn handle(
 // GET
 // ═══════════════════════════════════════════════════════════
 
-fn handle_get(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
-    let code = request.url().to_string()
-        .split("code=").nth(1).unwrap_or("").to_string();
+fn handle_get(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
+    let code = request
+        .url()
+        .split("code=")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
 
-    let app = match state.lock() { Ok(a) => a, Err(e) => return (500, json_error(e.to_string())) };
-    let all = app.repo.get_nodes_by_label("Patrol").unwrap_or_default();
+    let app = match state.lock() {
+        Ok(a) => a,
+        Err(e) => return (500, json_error(e.to_string())),
+    };
+    let all = app
+        .repo
+        .get_nodes_by_label(unified_mapping::PATROL_LABEL)
+        .unwrap_or_default();
 
     if code.is_empty() {
         let list: Vec<serde_json::Value> = all.iter().map(node_to_patrol).collect();
-        return (200, serde_json::json!({ "count": list.len(), "patrols": list }).to_string());
+        return (
+            200,
+            serde_json::json!({ "count": list.len(), "patrols": list }).to_string(),
+        );
     }
     for n in &all {
         if n.property("code").and_then(|v| v.as_str()) == Some(&code) {
@@ -66,10 +77,7 @@ fn handle_get(
 // POST — 解析 JSON → 调用推理机推演 → 写回图存储
 // ═══════════════════════════════════════════════════════════
 
-fn handle_post(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+fn handle_post(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -79,35 +87,54 @@ fn handle_post(
         Err(e) => return (400, json_error(format!("Invalid JSON: {}", e))),
     };
 
-    let app = match state.lock() { Ok(a) => a, Err(e) => return (500, json_error(e.to_string())) };
+    let app = match state.lock() {
+        Ok(a) => a,
+        Err(e) => return (500, json_error(e.to_string())),
+    };
     let mut results = Vec::new();
     let engine = TimelineEngine::new();
 
     // 日志文件
     let _ = std::fs::create_dir_all("logs");
-    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let log_path = format!("logs/patrol_{}.log", ts);
 
     for patrol in &patrols {
         let code = patrol.get("code").and_then(|v| v.as_str()).unwrap_or("");
         let name = patrol.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let pid  = patrol.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let wps_raw = patrol.get("waypoints").cloned().unwrap_or(serde_json::Value::Array(vec![]));
+        let pid = patrol.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let wps_raw = patrol
+            .get("waypoints")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![]));
         let wps_arr = wps_raw.as_array().map(|a| a.to_vec()).unwrap_or_default();
 
-        let waypoints: Vec<WaypointInput> = wps_arr.iter().map(|wp| WaypointInput {
-            seq:    wp.get("seq").and_then(|v| v.as_i64()).unwrap_or(0),
-            lat:    wp.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            lon:    wp.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            alt:    wp.get("alt").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            action: wp.get("action").and_then(|v| v.as_str()).unwrap_or("MOVE").to_string(),
-        }).collect();
+        let waypoints: Vec<WaypointInput> = wps_arr
+            .iter()
+            .map(|wp| WaypointInput {
+                seq: wp.get("seq").and_then(|v| v.as_i64()).unwrap_or(0),
+                lat: wp.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                lon: wp.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                alt: wp.get("alt").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                action: wp
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("MOVE")
+                    .to_string(),
+            })
+            .collect();
 
         // 找实体：通过 [:移动] 关系自动匹配
         let entity = find_entity(&app, code);
         let (entity_code, start_lat, start_lon, start_alt, speed) = match &entity {
             Some(n) => (
-                n.property("code").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+                n.property("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
                 get_float(n, "Space_abs", 0),
                 get_float(n, "Space_abs", 1),
                 get_float(n, "Space_abs", 3),
@@ -134,7 +161,9 @@ fn handle_post(
             patrol_id: pid.to_string(),
             waypoints,
             entity_code,
-            start_lat, start_lon, start_alt,
+            start_lat,
+            start_lon,
+            start_alt,
             speed,
         };
         let result = engine.simulate(&input);
@@ -142,23 +171,46 @@ fn handle_post(
         // ── 写回巡逻节点 ──
         let wps_json = serde_json::to_string(&wps_raw).unwrap_or_else(|_| "[]".into());
         let mut props = HashMap::new();
-        props.insert("iri".to_string(),          PropertyValue::from(code));
-        props.insert("id".to_string(),           PropertyValue::from(pid));
-        props.insert("code".to_string(),         PropertyValue::from(code));
-        props.insert("name".to_string(),         PropertyValue::from(name));
-        props.insert("waypoints".to_string(),    PropertyValue::from(wps_json.as_str()));
-        props.insert("duration".to_string(),     PropertyValue::from(result.duration));
-        props.insert("priority".to_string(),     PropertyValue::from(3i64));
-        props.insert("precondition".to_string(), PropertyValue::from(result.precondition.as_str()));
-        props.insert("effect".to_string(),       PropertyValue::from(result.effect.as_str()));
-        props.insert("cost".to_string(),         PropertyValue::from(result.cost.as_str()));
-        props.insert("composedOf".to_string(),   PropertyValue::from(result.composed_of.as_str()));
-        props.insert("domain".to_string(),       PropertyValue::from("Anti-SubmarineWarfare"));
-        props.insert("status".to_string(),       PropertyValue::from("有效"));
-        props.insert("update_time".to_string(),  PropertyValue::from("now"));
+        props.insert("iri".to_string(), PropertyValue::from(code));
+        props.insert("id".to_string(), PropertyValue::from(pid));
+        props.insert("code".to_string(), PropertyValue::from(code));
+        props.insert("name".to_string(), PropertyValue::from(name));
+        props.insert(
+            "waypoints".to_string(),
+            PropertyValue::from(wps_json.as_str()),
+        );
+        props.insert("duration".to_string(), PropertyValue::from(result.duration));
+        props.insert("priority".to_string(), PropertyValue::from(3i64));
+        props.insert(
+            "precondition".to_string(),
+            PropertyValue::from(result.precondition.as_str()),
+        );
+        props.insert(
+            "effect".to_string(),
+            PropertyValue::from(result.effect.as_str()),
+        );
+        props.insert(
+            "cost".to_string(),
+            PropertyValue::from(result.cost.as_str()),
+        );
+        props.insert(
+            "composedOf".to_string(),
+            PropertyValue::from(result.composed_of.as_str()),
+        );
+        props.insert(
+            "domain".to_string(),
+            PropertyValue::from("Anti-SubmarineWarfare"),
+        );
+        props.insert("status".to_string(), PropertyValue::from("有效"));
+        props.insert("update_time".to_string(), PropertyValue::from("now"));
 
-        let _ = app.repo.delete_node(code);
-        if let Err(e) = app.repo.insert_node(&Node::new(vec!["Patrol".to_string()], props)) {
+        // 以 id 为技术锚点执行删除（id 为空则回退到 code）
+        let delete_key = if pid.is_empty() { code } else { pid };
+        let _ = app.repo.delete_node(delete_key);
+        if let Err(e) = app.repo.insert_node(&Node::new(
+            vec![unified_mapping::PATROL_LABEL.to_string()],
+            props,
+        )) {
             return (500, json_error(e.to_string()));
         }
 
@@ -168,7 +220,12 @@ fn handle_post(
             remaining_s -= seg.time_s;
             if let Some(ref ent) = entity {
                 update_entity_position(
-                    &app, ent, seg.lat, seg.lon, seg.alt, remaining_s.max(0.0) as i64,
+                    &app,
+                    ent,
+                    seg.lat,
+                    seg.lon,
+                    seg.alt,
+                    remaining_s.max(0.0) as i64,
                 );
             }
         }
@@ -180,20 +237,35 @@ fn handle_post(
             let mut chain_count = 0usize;
             for part in composed.split(" ^ ") {
                 let part = part.trim();
-                if part.is_empty() { continue; }
+                if part.is_empty() {
+                    continue;
+                }
                 if let Some(paren) = part.find('(') {
                     let _action_name = &part[..paren];
                     chain_count += 1;
                     logf!(&log_path, "      ├ [{}] {}", chain_count, part);
 
                     // 查找关联实体上是否有自己的 composedOf
-                    let all = app.repo.get_nodes_by_label("Entity").unwrap_or_default();
+                    let all = app
+                        .repo
+                        .get_nodes_by_label(unified_mapping::ENTITY_LABEL)
+                        .unwrap_or_default();
                     for sub_e in &all {
-                        let sub_comp = sub_e.property("composedOf")
-                            .and_then(|v| v.as_str()).unwrap_or("");
+                        let sub_comp = sub_e
+                            .property("composedOf")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         if !sub_comp.is_empty() && sub_comp != composed as &str {
-                            let sub_code = sub_e.property("code").and_then(|v| v.as_str()).unwrap_or("");
-                            logf!(&log_path, "         ↳ 级联到实体 {}: {}", sub_code, sub_comp);
+                            let sub_code = sub_e
+                                .property("code")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            logf!(
+                                &log_path,
+                                "         ↳ 级联到实体 {}: {}",
+                                sub_code,
+                                sub_comp
+                            );
                             // 递归：该实体也有子动作需要继续推理
                             for sub_part in sub_comp.split(" ^ ") {
                                 if !sub_part.trim().is_empty() {
@@ -204,7 +276,11 @@ fn handle_post(
                     }
                 }
             }
-            logf!(&log_path, "   ✅ 级联推理完成: {} 个子动作已传导", chain_count);
+            logf!(
+                &log_path,
+                "   ✅ 级联推理完成: {} 个子动作已传导",
+                chain_count
+            );
         }
 
         results.push(serde_json::json!({
@@ -225,7 +301,10 @@ fn handle_post(
         }));
     }
 
-    (201, serde_json::json!({ "ok": true, "count": results.len(), "patrols": results }).to_string())
+    (
+        201,
+        serde_json::json!({ "ok": true, "count": results.len(), "patrols": results }).to_string(),
+    )
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -248,14 +327,20 @@ fn check_preconditions(
     };
 
     // 合并检查 patrol JSON 中的 precondition 和实体自身的 precondition
-    let patrol_precondition = patrol.get("precondition")
-        .and_then(|v| v.as_str()).unwrap_or("");
+    let patrol_precondition = patrol
+        .get("precondition")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // 检查实体自身的 precondition 属性
     let entity_precondition = entity_node
         .property("precondition")
-        .and_then(|v| v.as_str()).unwrap_or("");
-    let entity_code = entity_node.property("code").and_then(|v| v.as_str()).unwrap_or("?");
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let entity_code = entity_node
+        .property("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
 
     // 用于检查的 SWRL 字符串列表
     let checks = [
@@ -266,7 +351,9 @@ fn check_preconditions(
     let mut failures = Vec::new();
 
     for (source, swrl) in &checks {
-        if swrl.is_empty() { continue; }
+        if swrl.is_empty() {
+            continue;
+        }
 
         // 提取 swrlb:greaterThanOrEqual(variable.power, threshold) 约束
         if let Some(pos) = swrl.find("greaterThanOrEqual(") {
@@ -281,7 +368,13 @@ fn check_preconditions(
                         .trim_start_matches('?')
                         .replace(".power", "power")
                         .replace(".speed", "speed");
-                    let threshold: f64 = match parts[1].parse() { Ok(v) => v, Err(_) => { logf!(&log_path, "   ⚠ SWRL阈值解析失败: '{}'", parts[1]); continue; } };
+                    let threshold: f64 = match parts[1].parse() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            logf!(&log_path, "   ⚠ SWRL阈值解析失败: '{}'", parts[1]);
+                            continue;
+                        }
+                    };
 
                     // 从实体上取实际值
                     let actual = prop_as_f64(entity_node.property(&field_name)).unwrap_or(0.0);
@@ -292,8 +385,15 @@ fn check_preconditions(
                             source, field_name, entity_code, actual, threshold
                         ));
                     } else {
-                        logf!(&log_path, "   ✅ [{}] {}: {}={} >= {} 满足",
-                            source, field_name, entity_code, actual, threshold);
+                        logf!(
+                            &log_path,
+                            "   ✅ [{}] {}: {}={} >= {} 满足",
+                            source,
+                            field_name,
+                            entity_code,
+                            actual,
+                            threshold
+                        );
                     }
                 }
             }
@@ -311,7 +411,13 @@ fn check_preconditions(
                         .trim_start_matches('?')
                         .replace(".power", "power")
                         .replace(".speed", "speed");
-                    let threshold: f64 = match parts[1].parse() { Ok(v) => v, Err(_) => { logf!(&log_path, "   ⚠ SWRL阈值解析失败: '{}'", parts[1]); continue; } };
+                    let threshold: f64 = match parts[1].parse() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            logf!(&log_path, "   ⚠ SWRL阈值解析失败: '{}'", parts[1]);
+                            continue;
+                        }
+                    };
                     let actual = prop_as_f64(entity_node.property(&field_name)).unwrap_or(0.0);
 
                     if actual <= threshold {
@@ -333,8 +439,10 @@ fn check_preconditions(
                 if parts.len() == 2 {
                     let field_name = parts[0].trim_start_matches("?x.").trim_start_matches('?');
                     let expected = parts[1].trim_matches('\'').trim_matches('"');
-                    let actual = entity_node.property(field_name)
-                        .and_then(|v| v.as_str()).unwrap_or("");
+                    let actual = entity_node
+                        .property(field_name)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
 
                     if actual != expected {
                         failures.push(format!(
@@ -379,13 +487,19 @@ fn get_float(node: &Node, key: &str, idx: usize) -> f64 {
 }
 
 fn find_entity(app: &crate::app::AppState, patrol_code: &str) -> Option<Node> {
-    let all = app.repo.get_nodes_by_label("Entity").unwrap_or_default();
+    let all = app
+        .repo
+        .get_nodes_by_label(unified_mapping::ENTITY_LABEL)
+        .unwrap_or_default();
 
     // 1) 通过 [:移动] 关系自动匹配巡逻任务
     let mut candidates: Vec<&Node> = Vec::new();
     for n in &all {
         let ncode = n.property("code").and_then(|v| v.as_str()).unwrap_or("");
-        let rels = app.repo.get_relationships(ncode, Some("移动")).unwrap_or_default();
+        let rels = app
+            .repo
+            .get_relationships(ncode, Some("移动"))
+            .unwrap_or_default();
         for r in &rels {
             if r.end_node_id == patrol_code {
                 candidates.push(n);
@@ -414,23 +528,44 @@ fn find_entity(app: &crate::app::AppState, patrol_code: &str) -> Option<Node> {
 }
 
 fn update_entity_position(
-    app: &crate::app::AppState, entity: &Node,
-    lat: f64, lon: f64, alt: f64, remaining_dur: i64,
+    app: &crate::app::AppState,
+    entity: &Node,
+    lat: f64,
+    lon: f64,
+    alt: f64,
+    remaining_dur: i64,
 ) {
-    let a_code = entity.property("code").and_then(|v| v.as_str()).unwrap_or("");
-    let all = app.repo.get_nodes_by_label("Entity").unwrap_or_default();
+    // 以 id 为技术锚点（id 不存在则回退到 code）
+    let internal_id = entity
+        .property("id")
+        .and_then(|v| v.as_str())
+        .or_else(|| entity.property("code").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let a_code = entity
+        .property("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let all = app
+        .repo
+        .get_nodes_by_label(unified_mapping::ENTITY_LABEL)
+        .unwrap_or_default();
     for n in &all {
         if n.property("code").and_then(|v| v.as_str()) == Some(a_code) {
             let mut new_props = n.properties.clone();
-            new_props.insert("Space_abs".to_string(), PropertyValue::List(vec![
-                PropertyValue::Float(lat),
-                PropertyValue::Float(lon),
-                PropertyValue::Float(-30.0),
-                PropertyValue::Float(alt),
-            ]));
+            new_props.insert(
+                "Space_abs".to_string(),
+                PropertyValue::List(vec![
+                    PropertyValue::Float(lat),
+                    PropertyValue::Float(lon),
+                    PropertyValue::Float(-30.0),
+                    PropertyValue::Float(alt),
+                ]),
+            );
             new_props.insert("duration".to_string(), PropertyValue::from(remaining_dur));
-            let _ = app.repo.delete_node(a_code);
-            let _ = app.repo.insert_node(&Node::new(n.labels.clone(), new_props));
+            let _ = app.repo.delete_node(internal_id);
+            let _ = app
+                .repo
+                .insert_node(&Node::new(n.labels.clone(), new_props));
             return;
         }
     }
@@ -442,10 +577,10 @@ fn update_entity_position(
 
 fn node_to_patrol(n: &Node) -> serde_json::Value {
     let p = |k: &str| n.property(k);
-    let waypoints: serde_json::Value =
-        p("waypoints").and_then(|v| v.as_str())
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(serde_json::Value::Array(vec![]));
+    let waypoints: serde_json::Value = p("waypoints")
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Array(vec![]));
 
     serde_json::json!({
         "id":           p("id").and_then(|v| v.as_str()).unwrap_or(""),

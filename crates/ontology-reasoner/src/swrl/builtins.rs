@@ -94,9 +94,10 @@ impl BuiltinRegistry {
             builtin_iri
         };
 
-        let func = self.functions.get(fn_key).or_else(|| {
-            self.functions.get(builtin_iri)
-        });
+        let func = self
+            .functions
+            .get(fn_key)
+            .or_else(|| self.functions.get(builtin_iri));
 
         match func {
             Some(f) => f(args),
@@ -105,11 +106,7 @@ impl BuiltinRegistry {
     }
 
     /// 注册自定义内置函数
-    pub fn register(
-        &mut self,
-        name: &str,
-        func: BuiltinFn,
-    ) {
+    pub fn register(&mut self, name: &str, func: BuiltinFn) {
         self.functions.insert(name.to_string(), func);
     }
 
@@ -125,35 +122,47 @@ impl BuiltinRegistry {
     fn register_all_standard(&mut self) {
         // ── 比较函数 ──
         self.register("equal", |args| {
-            if args.len() < 2 { return Err("equal requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("equal requires 2 args".into());
+            }
             Ok(BuiltinResult::Boolean(args[0] == args[1]))
         });
 
         self.register("notEqual", |args| {
-            if args.len() < 2 { return Err("notEqual requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("notEqual requires 2 args".into());
+            }
             Ok(BuiltinResult::Boolean(args[0] != args[1]))
         });
 
         self.register("greaterThan", |args| {
-            if args.len() < 2 { return Err("greaterThan requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("greaterThan requires 2 args".into());
+            }
             let ord = compare_values(&args[0], &args[1])?;
             Ok(BuiltinResult::Boolean(ord.is_gt()))
         });
 
         self.register("lessThan", |args| {
-            if args.len() < 2 { return Err("lessThan requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("lessThan requires 2 args".into());
+            }
             let ord = compare_values(&args[0], &args[1])?;
             Ok(BuiltinResult::Boolean(ord.is_lt()))
         });
 
         self.register("greaterThanOrEqual", |args| {
-            if args.len() < 2 { return Err("greaterThanOrEqual requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("greaterThanOrEqual requires 2 args".into());
+            }
             let ord = compare_values(&args[0], &args[1])?;
             Ok(BuiltinResult::Boolean(ord.is_ge()))
         });
 
         self.register("lessThanOrEqual", |args| {
-            if args.len() < 2 { return Err("lessThanOrEqual requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("lessThanOrEqual requires 2 args".into());
+            }
             let ord = compare_values(&args[0], &args[1])?;
             Ok(BuiltinResult::Boolean(ord.is_le()))
         });
@@ -201,13 +210,19 @@ impl BuiltinRegistry {
             if divisor.abs() < f64::EPSILON {
                 return Err("Division by zero".into());
             }
-            Ok(BuiltinResult::Value(BuiltinValue::Float(as_f64(a) / divisor)))
+            Ok(BuiltinResult::Value(BuiltinValue::Float(
+                as_f64(a) / divisor,
+            )))
         });
 
         self.register("abs", |args| {
-            if args.is_empty() { return Err("abs requires 1 arg".into()); }
+            if args.is_empty() {
+                return Err("abs requires 1 arg".into());
+            }
             match &args[0] {
-                BuiltinValue::Integer(x) => Ok(BuiltinResult::Value(BuiltinValue::Integer(x.abs()))),
+                BuiltinValue::Integer(x) => {
+                    Ok(BuiltinResult::Value(BuiltinValue::Integer(x.abs())))
+                }
                 BuiltinValue::Float(x) => Ok(BuiltinResult::Value(BuiltinValue::Float(x.abs()))),
                 _ => Err("abs requires numeric argument".into()),
             }
@@ -215,19 +230,25 @@ impl BuiltinRegistry {
 
         // ── 字符串函数 ──
         self.register("contains", |args| {
-            if args.len() < 2 { return Err("contains requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("contains requires 2 args".into());
+            }
             let (s, substr) = extract_two_strings(args)?;
             Ok(BuiltinResult::Boolean(s.contains(&substr)))
         });
 
         self.register("startsWith", |args| {
-            if args.len() < 2 { return Err("startsWith requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("startsWith requires 2 args".into());
+            }
             let (s, prefix) = extract_two_strings(args)?;
             Ok(BuiltinResult::Boolean(s.starts_with(&prefix)))
         });
 
         self.register("endsWith", |args| {
-            if args.len() < 2 { return Err("endsWith requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("endsWith requires 2 args".into());
+            }
             let (s, suffix) = extract_two_strings(args)?;
             Ok(BuiltinResult::Boolean(s.ends_with(&suffix)))
         });
@@ -248,7 +269,9 @@ impl BuiltinRegistry {
 
         // ── 布尔函数 ──
         self.register("booleanNot", |args| {
-            if args.is_empty() { return Err("booleanNot requires 1 arg".into()); }
+            if args.is_empty() {
+                return Err("booleanNot requires 1 arg".into());
+            }
             match &args[0] {
                 BuiltinValue::Boolean(b) => Ok(BuiltinResult::Boolean(!b)),
                 _ => Err("booleanNot requires boolean argument".into()),
@@ -257,17 +280,30 @@ impl BuiltinRegistry {
 
         // ── 列表函数 ──
         self.register("listContains", |args| {
-            if args.len() < 2 { return Err("listContains requires 2 args".into()); }
+            if args.len() < 2 {
+                return Err("listContains requires 2 args".into());
+            }
             // 简化实现：列表以逗号分隔的字符串形式表示
-            let list_str = match &args[0] { BuiltinValue::String(s) => s, _ => return Err("listContains: first arg must be string list".into()) };
-            let item_str = match &args[1] { BuiltinValue::String(s) => s, _ => return Err("listContains: second arg must be string".into()) };
+            let list_str = match &args[0] {
+                BuiltinValue::String(s) => s,
+                _ => return Err("listContains: first arg must be string list".into()),
+            };
+            let item_str = match &args[1] {
+                BuiltinValue::String(s) => s,
+                _ => return Err("listContains: second arg must be string".into()),
+            };
             let items: Vec<&str> = list_str.split(',').map(|s| s.trim()).collect();
             Ok(BuiltinResult::Boolean(items.contains(&item_str.as_str())))
         });
 
         self.register("listLength", |args| {
-            if args.is_empty() { return Err("listLength requires 1 arg".into()); }
-            let list_str = match &args[0] { BuiltinValue::String(s) => s, _ => return Err("listLength: arg must be string list".into()) };
+            if args.is_empty() {
+                return Err("listLength requires 1 arg".into());
+            }
+            let list_str = match &args[0] {
+                BuiltinValue::String(s) => s,
+                _ => return Err("listLength: arg must be string list".into()),
+            };
             let count = list_str.split(',').filter(|s| !s.trim().is_empty()).count();
             Ok(BuiltinResult::Value(BuiltinValue::Integer(count as i64)))
         });
@@ -287,15 +323,15 @@ impl Default for BuiltinRegistry {
 fn compare_values(a: &BuiltinValue, b: &BuiltinValue) -> Result<std::cmp::Ordering, String> {
     match (a, b) {
         (BuiltinValue::Integer(x), BuiltinValue::Integer(y)) => Ok(x.cmp(y)),
-        (BuiltinValue::Float(x), BuiltinValue::Float(y)) => {
-            x.partial_cmp(y).ok_or_else(|| "Cannot compare NaN".to_string())
-        }
-        (BuiltinValue::Integer(x), BuiltinValue::Float(y)) => {
-            (*x as f64).partial_cmp(y).ok_or_else(|| "Cannot compare NaN".to_string())
-        }
-        (BuiltinValue::Float(x), BuiltinValue::Integer(y)) => {
-            x.partial_cmp(&(*y as f64)).ok_or_else(|| "Cannot compare NaN".to_string())
-        }
+        (BuiltinValue::Float(x), BuiltinValue::Float(y)) => x
+            .partial_cmp(y)
+            .ok_or_else(|| "Cannot compare NaN".to_string()),
+        (BuiltinValue::Integer(x), BuiltinValue::Float(y)) => (*x as f64)
+            .partial_cmp(y)
+            .ok_or_else(|| "Cannot compare NaN".to_string()),
+        (BuiltinValue::Float(x), BuiltinValue::Integer(y)) => x
+            .partial_cmp(&(*y as f64))
+            .ok_or_else(|| "Cannot compare NaN".to_string()),
         (BuiltinValue::String(x), BuiltinValue::String(y)) => Ok(x.cmp(y)),
         _ => Err(format!("Cannot compare {:?} with {:?}", a, b)),
     }
@@ -361,16 +397,20 @@ mod tests {
     fn test_comparison() {
         let reg = BuiltinRegistry::new();
 
-        let r = reg.execute("greaterThan", &[
-            BuiltinValue::Integer(10),
-            BuiltinValue::Integer(5),
-        ]).unwrap();
+        let r = reg
+            .execute(
+                "greaterThan",
+                &[BuiltinValue::Integer(10), BuiltinValue::Integer(5)],
+            )
+            .unwrap();
         assert_eq!(r, BuiltinResult::Boolean(true));
 
-        let r = reg.execute("lessThan", &[
-            BuiltinValue::Integer(3),
-            BuiltinValue::Integer(7),
-        ]).unwrap();
+        let r = reg
+            .execute(
+                "lessThan",
+                &[BuiltinValue::Integer(3), BuiltinValue::Integer(7)],
+            )
+            .unwrap();
         assert_eq!(r, BuiltinResult::Boolean(true));
     }
 
@@ -378,10 +418,9 @@ mod tests {
     fn test_arithmetic() {
         let reg = BuiltinRegistry::new();
 
-        let r = reg.execute("add", &[
-            BuiltinValue::Integer(3),
-            BuiltinValue::Integer(4),
-        ]).unwrap();
+        let r = reg
+            .execute("add", &[BuiltinValue::Integer(3), BuiltinValue::Integer(4)])
+            .unwrap();
         assert_eq!(r, BuiltinResult::Value(BuiltinValue::Integer(7)));
     }
 
@@ -389,20 +428,24 @@ mod tests {
     fn test_string_contains() {
         let reg = BuiltinRegistry::new();
 
-        let r = reg.execute("contains", &[
-            BuiltinValue::String("hello world".into()),
-            BuiltinValue::String("world".into()),
-        ]).unwrap();
+        let r = reg
+            .execute(
+                "contains",
+                &[
+                    BuiltinValue::String("hello world".into()),
+                    BuiltinValue::String("world".into()),
+                ],
+            )
+            .unwrap();
         assert_eq!(r, BuiltinResult::Boolean(true));
     }
 
     #[test]
     fn test_unbound_defers() {
         let reg = BuiltinRegistry::new();
-        let r = reg.execute("equal", &[
-            BuiltinValue::Unbound,
-            BuiltinValue::Integer(5),
-        ]).unwrap();
+        let r = reg
+            .execute("equal", &[BuiltinValue::Unbound, BuiltinValue::Integer(5)])
+            .unwrap();
         assert_eq!(r, BuiltinResult::Deferred);
     }
 }

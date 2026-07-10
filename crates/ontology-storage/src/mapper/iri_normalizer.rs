@@ -9,10 +9,10 @@ use std::collections::HashMap;
 /// 常用 RDF / OWL 前缀映射表
 fn builtin_prefixes() -> HashMap<&'static str, &'static str> {
     HashMap::from([
-        ("rdf",  "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+        ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
         ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
-        ("owl",  "http://www.w3.org/2002/07/owl#"),
-        ("xsd",  "http://www.w3.org/2001/XMLSchema#"),
+        ("owl", "http://www.w3.org/2002/07/owl#"),
+        ("xsd", "http://www.w3.org/2001/XMLSchema#"),
     ])
 }
 
@@ -58,10 +58,10 @@ impl IriNormalizer {
     ///
     /// 若未找到前缀或输入不含 `:` 则原样返回。
     pub fn expand(&self, curie: &str) -> String {
-        if let Some((prefix, local)) = curie.split_once(':') {
-            if let Some(ns) = self.prefix_to_ns.get(prefix) {
-                return format!("{}{}", ns, local);
-            }
+        if let Some((prefix, local)) = curie.split_once(':')
+            && let Some(ns) = self.prefix_to_ns.get(prefix)
+        {
+            return format!("{}{}", ns, local);
         }
         curie.to_string()
     }

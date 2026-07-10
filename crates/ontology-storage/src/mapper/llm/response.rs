@@ -141,12 +141,9 @@ fn parse_from_markdown<T: DeserializeOwned>(raw: &str) -> Result<LlmResponse<T>,
 }
 
 /// 解析 OpenAI 兼容的 chat completion 响应
-fn parse_chat_completion<T: DeserializeOwned>(
-    raw: &str,
-) -> Result<LlmResponse<T>, MappingError> {
-    let chat: OpenAiChatCompletion = serde_json::from_str(raw.trim()).map_err(|e| {
-        MappingError::LlmParse(format!("Chat Completion JSON 解析失败: {}", e))
-    })?;
+fn parse_chat_completion<T: DeserializeOwned>(raw: &str) -> Result<LlmResponse<T>, MappingError> {
+    let chat: OpenAiChatCompletion = serde_json::from_str(raw.trim())
+        .map_err(|e| MappingError::LlmParse(format!("Chat Completion JSON 解析失败: {}", e)))?;
 
     convert_chat_completion(chat)
 }
@@ -198,8 +195,8 @@ fn convert_chat_completion<T: DeserializeOwned>(
     let mut tool_calls = Vec::new();
 
     for tc in message.tool_calls {
-        let arguments: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-            .map_err(|e| {
+        let arguments: serde_json::Value =
+            serde_json::from_str(&tc.function.arguments).map_err(|e| {
                 MappingError::LlmParse(format!(
                     "工具调用参数 JSON 解析失败 (tool={}): {}",
                     tc.function.name, e

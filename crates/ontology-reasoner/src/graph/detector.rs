@@ -60,10 +60,10 @@ impl StateChangeDetector for DefaultStateChangeDetector {
 
         // 同名属性值变化
         for (k, sv) in &src.properties {
-            if let Some(tv) = tgt.properties.get(k) {
-                if sv != tv {
-                    changes.push(format!("属性 '{}' 变化: {:?} → {:?}", k, sv, tv));
-                }
+            if let Some(tv) = tgt.properties.get(k)
+                && sv != tv
+            {
+                changes.push(format!("属性 '{}' 变化: {:?} → {:?}", k, sv, tv));
             }
         }
 

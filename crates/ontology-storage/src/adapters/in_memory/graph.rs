@@ -37,30 +37,42 @@ impl InMemoryGraph {
             .property("iri")
             .and_then(|v| v.as_str())
             .map(String::from)
-            .unwrap_or_else(|| generate_id());
+            .unwrap_or_else(generate_id);
 
         self.nodes.insert(iri.clone(), node);
         Ok(iri)
     }
 
-    /// 根据 IRI 获取节点
-    pub fn get_node(&self, iri: &str) -> Option<&Node> {
-        self.nodes.get(iri)
+    /// 根据标识符获取节点（多级匹配，对标 Memgraph `WHERE n.id=$id OR n.code=$id`）。
+    ///
+    /// 1. 直接 HashMap 键查找（IRI / 内部 ID）
+    /// 2. 扫描匹配 `id` / `iri` / `code` 属性
+    pub fn get_node(&self, id: &str) -> Option<&Node> {
+        // 直接键查找
+        if let Some(n) = self.nodes.get(id) {
+            return Some(n);
+        }
+        // 属性扫描（id/iri/code 三字段模糊匹配）
+        self.nodes.values().find(|n| {
+            n.property("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == id)
+                || n.property("iri")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s == id)
+                || n.property("code")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s == id)
+        })
     }
 
     /// 根据标签获取所有匹配节点
     pub fn get_nodes_by_label(&self, label: &str) -> Vec<&Node> {
-        self.nodes
-            .values()
-            .filter(|n| n.has_label(label))
-            .collect()
+        self.nodes.values().filter(|n| n.has_label(label)).collect()
     }
 
     /// 插入关系
-    pub fn insert_relationship(
-        &mut self,
-        rel: &Relationship,
-    ) -> Result<(), StoreError> {
+    pub fn insert_relationship(&mut self, rel: &Relationship) -> Result<(), StoreError> {
         // 更新出向邻接表
         self.adj_out
             .entry(rel.start_node_id.clone())
@@ -97,10 +109,7 @@ impl InMemoryGraph {
     }
 
     /// 根据关系类型过滤
-    pub fn edges_by_type<'a>(
-        edges: &[&'a Relationship],
-        rel_type: &str,
-    ) -> Vec<&'a Relationship> {
+    pub fn edges_by_type<'a>(edges: &[&'a Relationship], rel_type: &str) -> Vec<&'a Relationship> {
         edges
             .iter()
             .filter(|r| r.rel_type == rel_type)
@@ -108,21 +117,51 @@ impl InMemoryGraph {
             .collect()
     }
 
-    /// 删除节点及其所有关联关系
-    pub fn remove_node(&mut self, iri: &str) -> Option<Node> {
-        // 清理邻接表（出向）
-        self.adj_out.remove(iri);
-        // 清理邻接表（入向）
-        self.adj_in.remove(iri);
-        // 清理其他节点指向此节点的边
+    /// 删除节点及其所有关联关系（多级标识符匹配）。
+    pub fn remove_node(&mut self, id: &str) -> Option<Node> {
+        // 先尝试直接键删除
+        let removed = self.nodes.remove(id);
+        if removed.is_some() {
+            // 清理邻接表
+            self.cleanup_edges(id);
+            return removed;
+        }
+        // 属性扫描 — 找到匹配的节点后以其实际 IRI 键删除
+        let actual_key = self
+            .nodes
+            .iter()
+            .find(|(_, n)| {
+                n.property("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s == id)
+                    || n.property("iri")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| s == id)
+                    || n.property("code")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| s == id)
+            })
+            .map(|(k, _)| k.clone());
+        if let Some(ref key) = actual_key {
+            let removed = self.nodes.remove(key);
+            if removed.is_some() {
+                self.cleanup_edges(key);
+            }
+            return removed;
+        }
+        None
+    }
+
+    /// 清理与指定节点键关联的所有邻接表条目
+    fn cleanup_edges(&mut self, node_key: &str) {
+        self.adj_out.remove(node_key);
+        self.adj_in.remove(node_key);
         for targets in self.adj_out.values_mut() {
-            targets.remove(iri);
+            targets.remove(node_key);
         }
         for sources in self.adj_in.values_mut() {
-            sources.remove(iri);
+            sources.remove(node_key);
         }
-
-        self.nodes.remove(iri)
     }
 }
 

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use ontology_storage::mapper::graph::node::Node;
 use ontology_storage::mapper::graph::property::PropertyValue;
 use ontology_storage::mapper::graph::relationship::Relationship;
+use ontology_storage::mapper::unified_mapping;
 use ontology_storage::repository::graph_store::GraphRepository;
 
 // ═══════════════════════════════════════════════════════════
@@ -47,7 +48,7 @@ pub fn find_entity_by_id_code(
         return None;
     }
 
-    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+    for label in unified_mapping::DOMAIN_LABELS {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
             let matches_id = if id.is_empty() {
@@ -55,6 +56,7 @@ pub fn find_entity_by_id_code(
             } else {
                 n.property("id").and_then(|v| v.as_str()) == Some(id)
                     || n.property("iri").and_then(|v| v.as_str()) == Some(id)
+                    || n.property("code").and_then(|v| v.as_str()) == Some(id)
                     || repo.get_node(id).ok().flatten().is_some()
             };
             let matches_code = match code {
@@ -86,13 +88,13 @@ pub fn find_entity_any(repo: &dyn GraphRepository, id: &str) -> Option<Node> {
         return Some(n);
     }
 
-    // 2) 精确匹配
-    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+    // 2) 精确匹配 — id 优先（技术主键），code/name 兜底
+    for label in unified_mapping::DOMAIN_LABELS {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
-            if n.property("code").and_then(|v| v.as_str()) == Some(id)
+            if n.property("id").and_then(|v| v.as_str()) == Some(id)
                 || n.property("iri").and_then(|v| v.as_str()) == Some(id)
-                || n.property("id").and_then(|v| v.as_str()) == Some(id)
+                || n.property("code").and_then(|v| v.as_str()) == Some(id)
                 || n.property("name").and_then(|v| v.as_str()) == Some(id)
             {
                 return Some(n.clone());
@@ -102,13 +104,15 @@ pub fn find_entity_any(repo: &dyn GraphRepository, id: &str) -> Option<Node> {
 
     // 3) 模糊回退 — name / desc 包含查询字符串
     // 调用方可能用自然语言描述（如 "雷达故障" 匹配 "雷达" 或 desc 中的 "雷达故障"）
-    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+    for label in unified_mapping::DOMAIN_LABELS {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
-            let name_match = n.property("name")
+            let name_match = n
+                .property("name")
                 .and_then(|v| v.as_str().map(|s| s.contains(id)))
                 .unwrap_or(false);
-            let desc_match = n.property("desc")
+            let desc_match = n
+                .property("desc")
                 .and_then(|v| v.as_str().map(|s| s.contains(id)))
                 .unwrap_or(false);
             if name_match || desc_match {
@@ -133,14 +137,18 @@ pub fn find_incoming_relationships(
     rel_type: Option<&str>,
 ) -> Vec<Relationship> {
     let mut results = Vec::new();
-    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+    for label in unified_mapping::DOMAIN_LABELS {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
-            let ncode = n.property("code").and_then(|v| v.as_str()).unwrap_or("");
-            if ncode == target_id {
+            let nid = n
+                .property("id")
+                .and_then(|v| v.as_str())
+                .or_else(|| n.property("code").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            if nid == target_id {
                 continue;
             }
-            let rels = repo.get_relationships(ncode, rel_type).unwrap_or_default();
+            let rels = repo.get_relationships(nid, rel_type).unwrap_or_default();
             for r in &rels {
                 if r.end_node_id == target_id {
                     results.push(r.clone());
@@ -162,7 +170,7 @@ pub fn summarize_relations(rels: &[Relationship]) -> Vec<RelCount> {
         }
     }
     let mut sorted: Vec<_> = counts.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+    sorted.sort_by_key(|(_, (count, _))| std::cmp::Reverse(*count));
     sorted
         .iter()
         .take(15)
@@ -189,19 +197,20 @@ pub fn get_type_ancestors(repo: &dyn GraphRepository, node: Option<&Node>) -> Ve
     }
 
     let mut path = vec![type_name.clone()];
-    let types = repo.get_nodes_by_label("Type").unwrap_or_default();
+    let types = repo
+        .get_nodes_by_label(unified_mapping::TYPE_LABEL)
+        .unwrap_or_default();
     let mut parents: HashMap<String, String> = HashMap::new();
 
     for t in &types {
         let tname = t.property("name").and_then(|v| v.as_str()).unwrap_or("");
         let rels = repo.get_relationships(tname, None).unwrap_or_default();
         for r in &rels {
-            if r.rel_type == "subClassOf" {
-                if let Some(pn) = repo.get_node(&r.end_node_id).ok().flatten() {
-                    if let Some(pname) = pn.property("name").and_then(|v| v.as_str()) {
-                        parents.insert(tname.to_string(), pname.to_string());
-                    }
-                }
+            if r.rel_type == unified_mapping::SUB_CLASS_OF_REL
+                && let Some(pn) = repo.get_node(&r.end_node_id).ok().flatten()
+                && let Some(pname) = pn.property("name").and_then(|v| v.as_str())
+            {
+                parents.insert(tname.to_string(), pname.to_string());
             }
         }
     }
@@ -303,7 +312,7 @@ pub fn predict_next_steps(repo: &dyn GraphRepository, node_id: &str) -> Vec<RelC
     }
 
     let mut sorted: Vec<_> = counts.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+    sorted.sort_by_key(|(_, (count, _))| std::cmp::Reverse(*count));
 
     sorted
         .iter()
@@ -357,18 +366,23 @@ pub fn ensure_cope_version(
         .property("cope_version")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if original_code.ends_with(&format!("_v{}", target_version)) && current_version == target_version {
+    if original_code.ends_with(&format!("_v{}", target_version))
+        && current_version == target_version
+    {
         return Ok(original_code.to_string());
     }
 
-    // 副本已存在 → 直接返回
+    // 副本已存在 → 直接返回（使用 id/code 多级匹配查找）
     if let Ok(Some(_existing)) = repo.get_node(&new_code) {
         return Ok(new_code);
     }
 
-    // 构造副本节点
+    // 构造副本节点 — 保留原 id（技术主键不变），仅修改 code 和 cope_version
     let mut new_props = entity.properties.clone();
-    new_props.insert("cope_version".to_string(), PropertyValue::from(target_version));
+    new_props.insert(
+        "cope_version".to_string(),
+        PropertyValue::from(target_version),
+    );
     new_props.insert("code".to_string(), PropertyValue::from(new_code.as_str()));
 
     let cloned = Node::new(entity.labels.clone(), new_props);
@@ -398,12 +412,15 @@ pub fn clone_all_for_version(
 
     // ── 1. 全量扫描：收集所有原实体（cope_version 为空） ──
     let mut all_ids: Vec<String> = Vec::new();
-    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+    for label in unified_mapping::DOMAIN_LABELS {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
             let code = n.property("code").and_then(|v| v.as_str()).unwrap_or("");
-            if code.is_empty() { continue; }
-            let ver = n.property("cope_version")
+            if code.is_empty() {
+                continue;
+            }
+            let ver = n
+                .property("cope_version")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             // 只克隆原实体（cope_version 为空），跳过已有副本
@@ -417,18 +434,25 @@ pub fn clone_all_for_version(
     let source = find_entity_by_id_code(repo, start_id, start_code)
         .or_else(|| find_entity_any(repo, start_id))
         .ok_or_else(|| format!("实体 '{}' 未找到", start_id))?;
-    let source_code = source.property("code").and_then(|v| v.as_str()).unwrap_or(start_id).to_string();
+    let source_code = source
+        .property("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or(start_id)
+        .to_string();
 
     // 如果源实体是已有副本，直接用
-    if let Some(ref sc) = start_code {
-        if let Ok(Some(n)) = repo.get_node(sc) {
-            let ver = n.property("cope_version").and_then(|v| v.as_str()).unwrap_or("");
-            if ver == target_version {
-                // 源已是此版本副本，不需要克隆
-                let mut empty_map = HashMap::new();
-                empty_map.insert(sc.to_string(), sc.to_string());
-                return Ok((empty_map, sc.to_string()));
-            }
+    if let Some(ref sc) = start_code
+        && let Ok(Some(n)) = repo.get_node(sc)
+    {
+        let ver = n
+            .property("cope_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if ver == target_version {
+            // 源已是此版本副本，不需要克隆
+            let mut empty_map = HashMap::new();
+            empty_map.insert(sc.to_string(), sc.to_string());
+            return Ok((empty_map, sc.to_string()));
         }
     }
 
@@ -465,14 +489,155 @@ pub fn clone_all_for_version(
 
     // 源实体对应的副本 code
     let new_source = if source_code.is_empty() {
-        code_map.values().next().cloned()
+        code_map
+            .values()
+            .next()
+            .cloned()
             .ok_or_else(|| "克隆失败：无实体".to_string())?
     } else {
-        code_map.get(&source_code).cloned()
+        code_map
+            .get(&source_code)
+            .cloned()
             .ok_or_else(|| format!("克隆源实体 '{}' 失败", source_code))?
     };
 
     Ok((code_map, new_source))
+}
+
+/// 选择性克隆指定节点及其关联的本体对象到指定版本。
+///
+/// **与 `clone_all_for_version` 的区别**：此函数只克隆指定的节点 + 通过关系
+/// 发现的本体对象，而不是全量克隆整个图。
+///
+/// 步骤：
+/// 1. 对每个指定 code，按名称/ID 定位原始节点
+/// 2. 克隆节点本身（`ensure_cope_version`）
+/// 3. 遍历每个节点的出向关系，如果目标节点标签在 `DOMAIN_LABELS` 中且
+///    cope_version 为空(是原实体)，也克隆目标节点
+/// 4. 复制原节点间的关系到副本之间（目标不在 code_map 中的跳过 — 版本隔离）
+///
+/// 返回 `old_code → new_code` 映射。
+pub fn clone_nodes_selective(
+    repo: &dyn GraphRepository,
+    node_codes: &[String],
+    cope_version: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    use std::collections::{HashMap, HashSet};
+
+    if node_codes.is_empty() {
+        return Err("node_codes 列表为空".to_string());
+    }
+
+    // ── 1. 按名称查找原始节点 ──
+    let mut originals: HashMap<String, Node> = HashMap::new();
+    for code in node_codes {
+        let node = find_entity_any(repo, code).ok_or_else(|| format!("节点 '{}' 未找到", code))?;
+
+        let ver = node
+            .property("cope_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // 如果是此版本的已有副本，跳过
+        if ver == cope_version {
+            continue;
+        }
+
+        let node_code = node
+            .property("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or(code)
+            .to_string();
+        originals.entry(node_code).or_insert(node);
+    }
+
+    if originals.is_empty() {
+        // 所有节点都已是此版本副本
+        let mut m = HashMap::new();
+        for c in node_codes {
+            m.insert(c.clone(), c.clone());
+        }
+        return Ok(m);
+    }
+
+    // ── 2. 克隆指定节点 + 关系发现 → 克隆关联本体 ──
+    let mut code_map: HashMap<String, String> = HashMap::new();
+    let mut to_process: Vec<String> = originals.keys().cloned().collect();
+    let mut processed: HashSet<String> = HashSet::new();
+
+    while let Some(old_code) = to_process.pop() {
+        if processed.contains(&old_code) {
+            continue;
+        }
+        processed.insert(old_code.clone());
+
+        // 获取原始节点
+        let node = if let Some(n) = originals.get(&old_code) {
+            n.clone()
+        } else if let Ok(Some(n)) = repo.get_node(&old_code) {
+            n
+        } else {
+            continue;
+        };
+
+        // 克隆节点本身
+        let new_code = ensure_cope_version(repo, &node, cope_version)?;
+        code_map.insert(old_code.clone(), new_code);
+
+        // ── 3. 查询关系，发现关联本体对象 ──
+        let out_rels = repo.get_relationships(&old_code, None).unwrap_or_default();
+        for r in &out_rels {
+            let target_id = &r.end_node_id;
+            if processed.contains(target_id.as_str()) {
+                continue;
+            }
+
+            // 检查目标节点是否是本体对象（在 DOMAIN_LABELS 中）
+            if let Ok(Some(target_node)) = repo.get_node(target_id) {
+                let target_ver = target_node
+                    .property("cope_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // 只克隆原实体（cope_version 为空），跳过已有副本
+                if target_ver.is_empty() {
+                    let target_code = target_node
+                        .property("code")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(target_id)
+                        .to_string();
+
+                    let is_domain_node = target_node
+                        .labels
+                        .iter()
+                        .any(|l| unified_mapping::DOMAIN_LABELS.contains(&l.as_str()));
+
+                    if is_domain_node {
+                        originals.entry(target_code.clone()).or_insert(target_node);
+                        to_process.push(target_code);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 4. 关系复制：副本之间建立与原实体相同的关系 ──
+    for (old_code, new_code) in &code_map {
+        let out_rels = repo.get_relationships(old_code, None).unwrap_or_default();
+        for r in &out_rels {
+            if let Some(new_tgt) = code_map.get(&r.end_node_id) {
+                let new_rel = ontology_storage::mapper::graph::relationship::Relationship {
+                    rel_type: r.rel_type.clone(),
+                    start_node_id: new_code.clone(),
+                    end_node_id: new_tgt.clone(),
+                    properties: r.properties.clone(),
+                };
+                let _ = repo.insert_relationship(&new_rel);
+            }
+        }
+    }
+
+    Ok(code_map)
 }
 
 /// 按副本版本号删除所有副本实体及其关联关系。
@@ -482,23 +647,23 @@ pub fn clone_all_for_version(
 /// 2. 对每个副本，DETACH DELETE（删除节点 + 所有关联关系）
 ///
 /// 返回删除的节点数。
-pub fn delete_by_cope_version(
-    repo: &dyn GraphRepository,
-    target_version: &str,
-) -> usize {
+pub fn delete_by_cope_version(repo: &dyn GraphRepository, target_version: &str) -> usize {
     let mut deleted = 0usize;
 
-    for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+    for label in unified_mapping::DOMAIN_LABELS {
         let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
         for n in &nodes {
-            let ver = n.property("cope_version")
+            let ver = n
+                .property("cope_version")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if ver == target_version {
-                let code = n.property("code")
+                let node_id = n
+                    .property("id")
                     .and_then(|v| v.as_str())
+                    .or_else(|| n.property("code").and_then(|v| v.as_str()))
                     .unwrap_or("");
-                if let Ok(cnt) = repo.delete_node(code) {
+                if let Ok(cnt) = repo.delete_node(node_id) {
                     deleted += cnt;
                 }
             }
@@ -522,8 +687,7 @@ pub fn update_entity_properties(
     updates: HashMap<String, PropertyValue>,
     cope_version: Option<&str>,
 ) -> Result<Node, String> {
-    let entity = find_entity_any(repo, id)
-        .ok_or_else(|| format!("实体 '{}' 未找到", id))?;
+    let entity = find_entity_any(repo, id).ok_or_else(|| format!("实体 '{}' 未找到", id))?;
 
     // 副本保护：原实体（cope_version 为空）先克隆再修改
     let target_code = if let Some(ver) = cope_version {
@@ -554,9 +718,10 @@ pub fn update_entity_properties(
     let target = find_entity_any(repo, &target_code)
         .ok_or_else(|| format!("目标实体 '{}' 未找到", target_code))?;
 
-    let code = target
-        .property("code")
+    let internal_id = target
+        .property("id")
         .and_then(|v| v.as_str())
+        .or_else(|| target.property("code").and_then(|v| v.as_str()))
         .unwrap_or(&target_code);
 
     let mut new_props = target.properties.clone();
@@ -565,7 +730,7 @@ pub fn update_entity_properties(
     }
 
     // 删除旧节点 → 写入更新后的节点
-    repo.delete_node(code)
+    repo.delete_node(internal_id)
         .map_err(|e| format!("删除原实体失败: {}", e))?;
     let updated = Node::new(target.labels, new_props);
     repo.insert_node(&updated)

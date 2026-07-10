@@ -69,7 +69,7 @@ pub fn handle() -> (u16, String) {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "id": { "type": "string", "description": "实体 code" },
+                        "id": { "type": "string", "description": "实体 id（技术主键），也可传 code" },
                         "updates": { "type": "object", "description": "要修改的键值对，如 {\"status\": \"无效\", \"confidence\": 0.95, \"speed\": 250}" },
                         "cope_version": { "type": "string", "description": "副本版本号。原实体（cope_version 为空）会先克隆到此版本的副本再修改" }
                     },
@@ -220,15 +220,15 @@ pub fn handle() -> (u16, String) {
             "type": "function",
             "function": {
                 "name": "create_relationship",
-                "description": "在两个节点之间创建关系。支持移动、subClassOf 等关系类型。source/target 通过 code 或 node_id 指定。",
+                "description": "在两个节点之间创建关系。支持移动、subClassOf 等关系类型。source/target 优先通过 id 指定，code 作为备选。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "rel_type": { "type": "string", "description": "关系类型，如 移动/subClassOf/HAS_VALUE/INSTANCE_OF/contains 等" },
-                        "source_code": { "type": "string", "description": "源节点 code（优先使用）" },
-                        "source_id": { "type": "string", "description": "源节点 ID（code 不可用时使用）" },
-                        "target_code": { "type": "string", "description": "目标节点 code（优先使用）" },
-                        "target_id": { "type": "string", "description": "目标节点 ID（code 不可用时使用）" },
+                        "source_id": { "type": "string", "description": "源节点 id（技术主键，优先使用）" },
+                        "source_code": { "type": "string", "description": "源节点 code（id 不可用时作为备选）" },
+                        "target_id": { "type": "string", "description": "目标节点 id（技术主键，优先使用）" },
+                        "target_code": { "type": "string", "description": "目标节点 code（id 不可用时作为备选）" },
                         "properties": { "type": "object", "description": "关系上的附加属性，键值对" }
                     },
                     "required": ["rel_type"]

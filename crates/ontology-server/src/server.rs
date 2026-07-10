@@ -34,7 +34,10 @@ pub fn start(config: ServerConfig, state: Arc<Mutex<AppState>>) {
     println!("   POST http://localhost:{}/confidence/policy", config.port);
     println!("   POST http://localhost:{}/nl-query", config.port);
     println!("   POST http://localhost:{}/ontology/create", config.port);
-    println!("   POST http://localhost:{}/relationships/create", config.port);
+    println!(
+        "   POST http://localhost:{}/relationships/create",
+        config.port
+    );
     println!("   POST http://localhost:{}/tools/call", config.port);
     println!("   GET|POST http://localhost:{}/rules", config.port);
     println!("   POST http://localhost:{}/infer-forward", config.port);
@@ -50,16 +53,21 @@ pub fn start(config: ServerConfig, state: Arc<Mutex<AppState>>) {
         std::thread::spawn(move || {
             let (status, body) = dispatch(&method_str, &url, &mut request, &state);
 
-            let content_type = if body.trim_start().starts_with('{') || body.trim_start().starts_with('[') {
-                "application/json; charset=utf-8"
-            } else {
-                "text/plain; charset=utf-8"
-            };
+            let content_type =
+                if body.trim_start().starts_with('{') || body.trim_start().starts_with('[') {
+                    "application/json; charset=utf-8"
+                } else {
+                    "text/plain; charset=utf-8"
+                };
 
             let response = tiny_http::Response::from_string(&body)
                 .with_status_code(status)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+                .with_header(
+                    Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap(),
+                )
+                .with_header(
+                    Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+                );
 
             if let Err(e) = request.respond(response) {
                 eprintln!("Response error: {}", e);
@@ -88,8 +96,12 @@ fn dispatch(
     }
 
     if path == "/rules" || path.starts_with("/rules") {
-        if method == "GET" { return routes::rules::handle_get(state); }
-        if method == "POST" { return routes::rules::handle_post(request, state); }
+        if method == "GET" {
+            return routes::rules::handle_get(state);
+        }
+        if method == "POST" {
+            return routes::rules::handle_post(request, state);
+        }
     }
 
     if method == "GET" {
@@ -109,7 +121,9 @@ fn dispatch(
             "/confidence/policy" => return routes::confidence_policy::handle(request, state),
             "/nl-query" => return routes::nl_query::handle(request, state),
             "/ontology/create" => return routes::ontology_create::handle(request, state),
-            "/relationships/create" => return routes::ontology_relationship::handle(request, state),
+            "/relationships/create" => {
+                return routes::ontology_relationship::handle(request, state);
+            }
             "/infer-forward" => return routes::infer::handle(request, state),
             "/entity/update" => return routes::entity_update::handle(request, state),
             "/tools/call" => return routes::tools_call::handle(request, state),
@@ -117,10 +131,34 @@ fn dispatch(
         }
     }
 
-    let known = ["/health", "/tools", "/schema", "/query", "/reason", "/context", "/patrol", "/strike", "/confidence/policy", "/nl-query", "/ontology/create", "/relationships/create", "/rules", "/tools/call", "/infer-forward", "/entity/update"];
+    let known = [
+        "/health",
+        "/tools",
+        "/schema",
+        "/query",
+        "/reason",
+        "/context",
+        "/patrol",
+        "/strike",
+        "/confidence/policy",
+        "/nl-query",
+        "/ontology/create",
+        "/relationships/create",
+        "/rules",
+        "/tools/call",
+        "/infer-forward",
+        "/entity/update",
+    ];
     if known.contains(&path) {
-        let allowed = if matches!(path, "/health" | "/tools" | "/schema" | "/rules") { "GET" } else { "POST" };
-        return (405, json_error(format!("Method not allowed. Use {}.", allowed)));
+        let allowed = if matches!(path, "/health" | "/tools" | "/schema" | "/rules") {
+            "GET"
+        } else {
+            "POST"
+        };
+        return (
+            405,
+            json_error(format!("Method not allowed. Use {}.", allowed)),
+        );
     }
 
     (404, json_error(format!("Not found: {} {}", method, path)))

@@ -7,13 +7,10 @@ use std::sync::{Arc, Mutex};
 
 use ontology_storage::ontology::relationship;
 
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
 
-pub fn handle(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -26,7 +23,12 @@ pub fn handle(
 
     let rels = match payload.get("relationships").and_then(|v| v.as_array()) {
         Some(r) if !r.is_empty() => r,
-        _ => return (400, json_error("Missing or empty 'relationships' array".into())),
+        _ => {
+            return (
+                400,
+                json_error("Missing or empty 'relationships' array".into()),
+            );
+        }
     };
 
     let app = match state.lock() {

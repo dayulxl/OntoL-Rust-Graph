@@ -14,23 +14,23 @@
 //! - `memgraph` (默认) — 启用 Memgraph 后端适配器（主力）
 //! - `in-memory`       — 启用内存属性图存储（测试用）
 
+pub mod adapters;
 pub mod error;
 pub mod factory;
 pub mod mapper;
 pub mod repository;
-pub mod adapters;
 
 #[cfg(any(feature = "memgraph", feature = "llm"))]
 pub mod ontology;
 
 pub use error::{GraphError, MappingError, StoreError};
+pub use mapper::graph::pattern::{GraphPattern, NodePattern, RelationshipPattern};
 pub use mapper::graph::property::PropertyValue;
 pub use mapper::graph::{node::Node, relationship::Relationship};
-pub use mapper::graph::pattern::{GraphPattern, NodePattern, RelationshipPattern};
 
 #[cfg(feature = "llm")]
 pub use mapper::llm;
 
+pub use factory::StorageConfig;
 pub use repository::graph_store::GraphRepository;
 pub use repository::transaction::Transaction;
-pub use factory::StorageConfig;

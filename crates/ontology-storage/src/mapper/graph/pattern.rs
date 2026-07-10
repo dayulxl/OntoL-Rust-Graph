@@ -92,20 +92,16 @@ pub struct GraphPattern {
 
 impl GraphPattern {
     /// 创建新的图模式
-    pub fn new(
-        start: NodePattern,
-        relationship: RelationshipPattern,
-        end: NodePattern,
-    ) -> Self {
-        Self { start, relationship, end }
+    pub fn new(start: NodePattern, relationship: RelationshipPattern, end: NodePattern) -> Self {
+        Self {
+            start,
+            relationship,
+            end,
+        }
     }
 
     /// 快捷创建：匹配特定标签节点之间的特定类型关系
-    pub fn link(
-        start_label: &str,
-        rel_type: &str,
-        end_label: &str,
-    ) -> Self {
+    pub fn link(start_label: &str, rel_type: &str, end_label: &str) -> Self {
         Self {
             start: NodePattern::with_label(start_label).with_variable("s"),
             relationship: RelationshipPattern::with_type(rel_type).with_variable("r"),

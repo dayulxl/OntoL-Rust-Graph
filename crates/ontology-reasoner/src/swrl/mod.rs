@@ -27,7 +27,10 @@ pub mod engine;
 pub mod parser;
 
 pub use ast::{Atom, Rule, VariableBinding};
-pub use behavior::{execute_behaviors_batch, parse_behavior, BehaviorAction, BehaviorResult};
+pub use behavior::{
+    BehaviorAction, BehaviorResult, evaluate_shacl_precondition, execute_behaviors_batch,
+    execute_effect, parse_behavior,
+};
 pub use builtins::BuiltinRegistry;
 pub use engine::SwrlEngine;
 pub use parser::SwrlParser;

@@ -9,6 +9,7 @@
 //!   RUST_LOG                    — 日志级别 (默认 info)
 
 use ontology_reasoner::OperationMode;
+use std::str::FromStr;
 
 #[allow(dead_code)]
 pub struct ServerConfig {
@@ -17,22 +18,24 @@ pub struct ServerConfig {
     pub graph_user: String,
     pub graph_password: String,
     pub default_mode: OperationMode,
-    #[allow(dead_code)] pub log_level: String,
+    #[allow(dead_code)]
+    pub log_level: String,
 }
 
 impl ServerConfig {
     pub fn from_env() -> Self {
         Self {
             port: std::env::var("ONTOLOGY_PORT")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(8085),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8085),
             graph_uri: std::env::var("ONTOLOGY_GRAPH_URI")
                 .unwrap_or_else(|_| "memgraph://localhost:7687".into()),
-            graph_user: std::env::var("ONTOLOGY_GRAPH_USER")
-                .unwrap_or_default(),
-            graph_password: std::env::var("ONTOLOGY_GRAPH_PASSWORD")
-                .unwrap_or_default(),
-            default_mode: std::env::var("ONTOLOGY_MODE").ok()
-                .and_then(|s| OperationMode::from_str(&s))
+            graph_user: std::env::var("ONTOLOGY_GRAPH_USER").unwrap_or_default(),
+            graph_password: std::env::var("ONTOLOGY_GRAPH_PASSWORD").unwrap_or_default(),
+            default_mode: std::env::var("ONTOLOGY_MODE")
+                .ok()
+                .and_then(|s| OperationMode::from_str(&s).ok())
                 .unwrap_or(OperationMode::Exercise),
             log_level: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
         }

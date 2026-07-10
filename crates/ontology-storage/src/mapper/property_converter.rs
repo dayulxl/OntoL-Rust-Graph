@@ -24,16 +24,20 @@ pub fn datetime_to_property(iso_string: &str) -> Result<PropertyValue, MappingEr
     if iso_string.contains('T') {
         Ok(PropertyValue::String(iso_string.to_string()))
     } else {
-        Err(MappingError::PropertyConversion(
-            format!("Invalid datetime format, expected ISO 8601: {}", iso_string)
-        ))
+        Err(MappingError::PropertyConversion(format!(
+            "Invalid datetime format, expected ISO 8601: {}",
+            iso_string
+        )))
     }
 }
 
 /// 将字符串数组转换为 List 属性值
 pub fn string_list_to_property(items: Vec<&str>) -> PropertyValue {
     PropertyValue::List(
-        items.into_iter().map(|s| PropertyValue::String(s.to_string())).collect()
+        items
+            .into_iter()
+            .map(|s| PropertyValue::String(s.to_string()))
+            .collect(),
     )
 }
 
@@ -82,6 +86,9 @@ mod tests {
     fn list_conversion() {
         let val = string_list_to_property(vec!["a", "b", "c"]);
         let extracted = property_to_string_list(&val);
-        assert_eq!(extracted, Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]));
+        assert_eq!(
+            extracted,
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
     }
 }

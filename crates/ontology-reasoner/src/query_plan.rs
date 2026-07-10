@@ -40,9 +40,11 @@ pub enum QueryResult {
     Single(Option<ontology_storage::mapper::graph::node::Node>),
     List(Vec<ontology_storage::mapper::graph::node::Node>),
     Relationships(Vec<ontology_storage::mapper::graph::relationship::Relationship>),
-    PatternMatches(Vec<(
-        ontology_storage::mapper::graph::node::Node,
-        Vec<ontology_storage::mapper::graph::relationship::Relationship>,
-        ontology_storage::mapper::graph::node::Node,
-    )>),
+    PatternMatches(
+        Vec<(
+            ontology_storage::mapper::graph::node::Node,
+            Vec<ontology_storage::mapper::graph::relationship::Relationship>,
+            ontology_storage::mapper::graph::node::Node,
+        )>,
+    ),
 }

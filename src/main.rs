@@ -29,17 +29,14 @@ fn create_repo() -> Result<SharedRepository, Box<dyn std::error::Error>> {
     {
         let uri = std::env::var("ONTOLOGY_GRAPH_URI")
             .unwrap_or_else(|_| "memgraph://localhost:7687".into());
-        let user = std::env::var("ONTOLOGY_GRAPH_USER")
-            .unwrap_or_default();
-        let password = std::env::var("ONTOLOGY_GRAPH_PASSWORD")
-            .unwrap_or_default();
+        let user = std::env::var("ONTOLOGY_GRAPH_USER").unwrap_or_default();
+        let password = std::env::var("ONTOLOGY_GRAPH_PASSWORD").unwrap_or_default();
 
         println!("🔌 连接 Memgraph ({} @ {})...", user, uri);
-        let adapter = ontology_storage::adapters::memgraph::MemgraphAdapter::connect(
-            &uri, &user, &password,
-        )?;
+        let adapter =
+            ontology_storage::adapters::memgraph::MemgraphAdapter::connect(&uri, &user, &password)?;
         println!("   ✅ Memgraph 连接成功\n");
-        return Ok(Arc::new(adapter));
+        Ok(Arc::new(adapter))
     }
 
     #[cfg(not(feature = "memgraph"))]
@@ -114,10 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 年龄属性
-    let ages = vec![
-        ("http://ex#Alice", "25"),
-        ("http://ex#Bob", "45"),
-    ];
+    let ages = vec![("http://ex#Alice", "25"), ("http://ex#Bob", "45")];
     for (ind, age) in &ages {
         let mut props = HashMap::new();
         props.insert("iri".to_string(), PropertyValue::from("http://ex#hasAge"));
@@ -125,7 +119,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut rel_props = HashMap::new();
         rel_props.insert("value".to_string(), PropertyValue::from(*age));
         repo.insert_relationship(&Relationship::new(
-            *ind, "HAS_VALUE", &age_node_iri, rel_props,
+            *ind,
+            "HAS_VALUE",
+            &age_node_iri,
+            rel_props,
         ))?;
     }
 
@@ -148,9 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // 互逆
-    reasoner.load_swrl_rule(
-        "[brotherInverse: hasBrother(?x, ?y) -> hasBrother(?y, ?x)]",
-    )?;
+    reasoner.load_swrl_rule("[brotherInverse: hasBrother(?x, ?y) -> hasBrother(?y, ?x)]")?;
 
     println!("   ✅ {} 条规则已加载\n", reasoner.rule_count());
 

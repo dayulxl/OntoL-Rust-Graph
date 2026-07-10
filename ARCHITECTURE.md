@@ -333,17 +333,28 @@ ontologica_rust_graph/
 │   │       └── ontology/                   # Entity/Type/Patrol/Relationship CRUD
 │   │
 │   ├── ontology-reasoner/                  # 核心推理引擎
+│   │   ├── CRATE_CONSTRAINTS.md             #   ✅ 约束说明文档 (v1.0)
 │   │   └── src/
 │   │       ├── graph/                      # 通用图遍历 — 产品层框架 (v0.3)
 │   │       │   ├── explorer.rs             #   GraphExplorer — BFS 多跳遍历
 │   │       │   ├── detector.rs             #   StateChangeDetector trait — 可插拔
-│   │       │   └── util.rs                 #   实体查找/关系汇总/类型层次/规则匹配
+│   │       │   ├── util.rs                 #   实体查找/关系汇总/类型层次/规则匹配
+│   │       │   ├── actions.rs              #   自定义逻辑函数 (ActionFunction trait)
+│   │       │   └── README.md               #   模块文档
 │   │       ├── dwl2/                       # DWL2 查询 (12 种构造子)
+│   │       │   ├── ast.rs / query.rs       #   ClassExpression + Dwl2QueryEngine
+│   │       │   └── README.md               #   模块文档
 │   │       ├── swrl/                       # SWRL 推理 (7 种 Atom + fixpoint + behavior 并发)
 │   │       │   ├── ast.rs / parser.rs      #   AST + 文本解析
 │   │       │   ├── builtins.rs             #   内置函数（比较/数学/字符串）
 │   │       │   ├── engine.rs               #   规则执行引擎（thread::scope 并发）
-│   │       │   └── behavior.rs             #   行为动作引擎（6 字段 + composedOf 递归）
+│   │       │   ├── behavior.rs             #   行为动作引擎（6 字段 + composedOf 递归）
+│   │       │   └── README.md               #   模块文档
+│   │       ├── shacl/                      # ✅ SHACL 图约束验证
+│   │       │   ├── ast.rs                  #   Shape / Constraint / Target / PropertyPath
+│   │       │   ├── engine.rs               #   ShaclEngine — 验证引擎
+│   │       │   ├── result.rs               #   ValidationResult / ValidationReport
+│   │       │   └── error.rs                #   ShaclError
 │   │       ├── confidence/                 # 置信度计算 + 策略切换
 │   │       ├── spatial/                    # Haversine 空间计算
 │   │       ├── timeline/                   # 时序推演 + 打击决策
@@ -523,3 +534,302 @@ cargo run -p ontology-server                     # Memgraph 编译
 11. **UTF-8 编码** — 所有源文件（`.rs`/`.toml`/`.md`/`.cypher`/`.swrl`/`.py`/`.json`）统一 UTF-8（无 BOM），禁止其他编码
 12. **非业务层不写业务代码** — `ontology-storage`（存储适配）和 `ontology-server`（HTTP 网关）只做协议/传输/持久化，不包含推理、置信度计算、规则解析等业务逻辑。业务代码唯一归宿是 `ontology-reasoner`。判断标准：如果代码里出现了 DWL2/SWRL/Confidence/Timeline/Spatial 任意一个词，它就不该在 storage 或 server crate 里
 13. **产品/业务分层 (v0.3)** — `ontology-reasoner::graph` 是**产品层**（框架），定义 `GraphExplorer`（通用图遍历）、`StateChangeDetector` trait（可插拔检测器接口）和通用 util 函数。`ontology-server::routes::infer` 是**业务层**，通过实现 `StateChangeDetector` trait 的 `MilitaryStateChangeDetector` 注入领域知识（Space_abs/haversine/中文关系语义）。产品层不依赖 serde_json/tiny_http，不包含任何领域概念。换业务场景只需重新实现 trait，产品代码完全不动
+14. **宽容执行 (Tolerant Execution v1.0)** — 所有设计必须是灵活的：**有这个字段，就用；没有这个字段，跳过继续执行。有这个值，就处理；没有这个值，用默认值兜底继续执行。** 系统在任何情况下都不因字段缺失或值为空而崩溃或中断链路。这是贯穿全栈的第一性约束：存储层、推理层、HTTP 层、LLM 交互层、序列化/反序列化、规则引擎、行为引擎，无一例外
+15. **id 锚定 (Identity Anchor v1.0)** — 每个节点/实体的 `id` 字段是数据的**唯一技术标识符**，作为锁定数据的技术组件。所有 CRUD 操作（查询/更新/删除）均以 `id` 为锚点，`id` 由系统生成，前端不可修改。`code` 和 `name` 仅作业务语义字段，用于展示与搜索，不作为数据定位的技术锚点
+
+---
+
+## 19. 宽容执行约束（Tolerant Execution）
+
+> **一句话**：有和没有，都继续执行。不因缺失而中断，不因空白而崩溃。
+
+### 19.1 核心原则
+
+```
+          有字段/有值 ──→ 正常处理 ──→ 继续
+         /
+请求/节点 ──→ 无字段/无值 ──→ 跳过或默认值兜底 ──→ 继续
+         \
+          无字段/无值 ──→ 记录日志(warn/debug) ──→ 继续
+
+禁止路径：无字段/无值 ──→ panic / Err 传播 / 链路中断
+```
+
+### 19.2 各层约束
+
+#### 存储层 (`ontology-storage`)
+
+| 场景 | 约束 | 示例 |
+|------|------|------|
+| 节点属性缺失 | `node.property("x")` 返回 `None` 时用默认值，不报错 | `node.property("speed").unwrap_or(0.0)` |
+| 关系不存在 | `get_relationships()` 返回空列表时继续，不视为错误 | 推理层收到空列表 = "此节点无关系"，正常处理 |
+| 查询无结果 | 空结果集，不是错误 | `vec![]` 而非 `Err(...)` |
+| 类型转换失败 | `parse::<i64>()` 失败 → 用默认值 + log | `s.parse().unwrap_or(0)` |
+| 连接断开 | 重试 + 降级（in-memory fallback），不 panic | Memgraph 挂了 → InMemory 兜底 + 空数据继续 |
+
+#### 推理层 (`ontology-reasoner`)
+
+| 场景 | 约束 | 示例 |
+|------|------|------|
+| SWRL 前置条件无绑定 | 阻断此条规则，继续下一条 | `binding_count == 0 → blocked_reason = "无匹配"` |
+| DWL2 查询表达式中途无结果 | 返回空集，上游自行处理 | `ClassExpression` 评估 → `empty()` |
+| 置信度计算参数缺失 | 用策略默认权重 | `ConfidencePolicy::default_weights()` |
+| 行为引擎字段缺失 | 6 个行为字段任一为空 → 跳过该字段，其余继续 | `precondition` 为空 → 无前置条件，直接执行 effect |
+| 规则解析失败 | 跳过该规则，继续解析下一条 | `parse_rule()` → `warn!("规则 {} 解析失败，跳过", name)` |
+
+#### HTTP 层 (`ontology-server`)
+
+| 场景 | 约束 | 示例 |
+|------|------|------|
+| 请求体 JSON 字段缺失 | `serde_json` 反序列化时用 `Option<T>` + `#[serde(default)]` | `field: Option<String>` 或 `#[serde(default)] field: String` |
+| 查询参数缺失 | 用默认值 | `page.unwrap_or(1)`, `limit.unwrap_or(20)` |
+| 推理结果为空 | 返回 200 + `{"results": [], "reason": "no_match"}` | 不返回 4xx/5xx |
+| 下游服务超时 | 返回部分结果 + 降级标记 | `{"partial": true, "reason": "timeout"}` |
+| LLM 返回解析失败 | 返回原始文本 + 解析错误信息，不中断 | `{"raw": "...", "parse_error": "..."}` |
+
+#### 序列化 / 反序列化
+
+| 场景 | 约束 |
+|------|------|
+| `ClassExpression::to_key()` | 任意表达式都能生成 key，不 panic |
+| `ClassExpression::from_key()` | 解析失败 → `Err` 由调用方降级为默认表达式 |
+| JSON 反序列化 | 未知字段忽略（`#[serde(deny_unknown_fields)]` **禁用**） |
+| 枚举反序列化 | 未知 variant → fallback variant（如 `Other(String)`） |
+
+### 19.3 代码模式
+
+#### ✅ 正确模式
+
+```rust
+// 模式 1：缺失用默认值
+let speed = node.property("speed").unwrap_or(0.0);
+let name = node.property("name").unwrap_or_else(|| "未命名".to_string());
+let priority = entity.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
+
+// 模式 2：Option 链式处理
+if let Some(effect) = entity.effect() {
+    engine.execute_effect(&effect, &bindings)?;
+}
+// effect 为空 → 跳过，继续
+
+// 模式 3：空集合正常返回
+let relationships = repo.get_relationships(&node_id, None)?;
+// 返回 vec![] 是正常情况，不是错误
+for rel in relationships {
+    // 有就处理，没有就跳过
+}
+
+// 模式 4：部分成功
+let results: Vec<Result<Item, Error>> = items.iter().map(process).collect();
+let successes: Vec<_> = results.iter().filter_map(|r| r.ok()).collect();
+let failures: Vec<_> = results.iter().filter_map(|r| r.err()).collect();
+log::warn!("{}/{} 处理成功，{} 跳过", successes.len(), items.len(), failures.len());
+// 继续用 successes
+
+// 模式 5：JSON 反序列化宽容
+#[derive(Deserialize)]
+struct QueryRequest {
+    query: String,                        // 必填
+    #[serde(default)]
+    page: Option<usize>,                  // 可选，缺失 = None
+    #[serde(default = "default_limit")]
+    limit: usize,                         // 可选，缺失 = 20
+}
+
+// 模式 6：规则引擎宽容
+for rule in rules {
+    match engine.execute_rule(rule) {
+        Ok(result) => results.push(result),
+        Err(e) => log::warn!("规则 {} 执行失败，跳过: {}", rule.name, e),
+    }
+    // 继续下一条规则
+}
+```
+
+#### ❌ 反模式（禁止）
+
+```rust
+// 反模式 1：unwrap 裸用
+let speed = node.property("speed").unwrap();  // ❌ speed 为 None 时 panic
+
+// 反模式 2：缺失即报错
+let name = entity.name.ok_or(anyhow!("name 字段缺失"))?;  // ❌ 用默认值，不要传播 Err
+
+// 反模式 3：空集合报错
+if results.is_empty() {
+    return Err(anyhow!("查询无结果"));  // ❌ 空结果是正常情况
+}
+
+// 反模式 4：严格要求字段存在
+if entity.effect.is_none() {
+    return Err(anyhow!("effect 字段缺失，无法执行"));  // ❌ 没有 effect 就跳过
+}
+
+// 反模式 5：拒绝未知字段
+#[serde(deny_unknown_fields)]  // ❌ 禁止！新加字段会破坏旧客户端
+struct Request { ... }
+```
+
+### 19.4 日志级别约定
+
+| 情况 | 级别 | 说明 |
+|------|------|------|
+| 字段缺失，使用默认值 | `debug!` | 正常降级，不产生告警噪音 |
+| 字段缺失，跳过处理逻辑 | `debug!` | 设计如此，不是异常 |
+| 规则/表达式解析失败，跳过该条 | `warn!` | 值得关注但不影响整体 |
+| 连接失败，降级到备用 | `warn!` | 运维需关注 |
+| 所有备用路径耗尽的致命失败 | `error!` | 仅此情况用 error |
+
+### 19.5 测试检查清单
+
+每个模块的测试必须覆盖：
+
+- [ ] 所有字段都存在 → 正常执行
+- [ ] 关键字段缺失 → 不 panic，不返回 Err
+- [ ] 所有字段缺失 → 不 panic，返回合理默认值
+- [ ] 下游返回空 → 不 panic，空结果正常返回
+- [ ] 下游返回错误 → 降级，不 panic
+- [ ] JSON 多出未知字段 → 反序列化成功
+- [ ] JSON 缺少可选字段 → 反序列化成功
+- [ ] 规则/表达式语法错误 → 跳过该条，继续执行其余
+
+---
+
+## 20. 数据标识与访问约束（Identity Anchor）
+
+> **一句话**：`id` 是唯一技术锚点，CRUD 以此锁定数据。`code`/`name` 仅供展示与搜索。
+
+### 20.1 角色定义
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    实体标识分层                          │
+│                                                         │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │    id    │  │     code     │  │      name        │  │
+│  │ 技术主键  │  │   业务编码    │  │     名称         │  │
+│  │ 不可修改  │  │   可修改      │  │    可修改        │  │
+│  │ 系统生成  │  │  语义搜索     │  │   展示用         │  │
+│  └────┬─────┘  └──────┬───────┘  └────────┬─────────┘  │
+│       │               │                   │            │
+│       ▼               ▼                   ▼            │
+│  ┌────────────┐  ┌────────────┐  ┌─────────────────┐   │
+│  │ CRUD 锚点  │  │ 辅助定位   │  │  可读标识       │   │
+│  │ 锁定/删除  │  │ 模糊搜索   │  │  日志/报告      │   │
+│  └────────────┘  └────────────┘  └─────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+| 字段 | 角色 | 生成方 | 可修改 | 唯一性 | 用途 |
+|------|------|--------|--------|--------|------|
+| `id` | **技术主键** | 系统 | ❌ 不可修改 | 图全局唯一 | 查询/更新/删除的锁定锚点 |
+| `code` | 业务编码 | 系统或用户 | ✅ 可修改 | 业务域内唯一 | 语义搜索、模糊匹配、前端展示 |
+| `name` | 名称 | 用户 | ✅ 可修改 | 不保证唯一 | 可读标识、日志、报告 |
+
+### 20.2 各层约束
+
+#### 存储层 — 以 id 为唯一索引
+
+```cypher
+-- 唯一约束建立在 id 上
+CREATE CONSTRAINT entity_id_constraint FOR (e:Entity) REQUIRE e.id IS UNIQUE
+
+-- code 也可建约束，但不是技术锚点
+CREATE CONSTRAINT entity_code_constraint FOR (e:Entity) REQUIRE e.code IS UNIQUE
+```
+
+| 操作 | 锚点 | 规则 |
+|------|------|------|
+| 查询单条 | `id` | `MATCH (n) WHERE n.id = $id` — 精确匹配 |
+| 更新 | `id` | `MATCH (n {id: $id}) SET n += $props` — 锁定后修改 |
+| 删除 | `id` | `MATCH (n {id: $id}) DETACH DELETE n` — 精确删除 |
+| 搜索 | `code` / `name` | `WHERE n.code CONTAINS $kw OR n.name CONTAINS $kw` — 模糊匹配 |
+| 关系创建 | `id` | `MATCH (a {id: $from_id}), (b {id: $to_id}) CREATE (a)-[:REL]->(b)` |
+
+#### 推理层 — id 贯穿全链路
+
+| 场景 | 约束 |
+|------|------|
+| SWRL 规则匹配 | 绑定变量使用 `id` 追踪实体，`code`/`name` 仅参与条件匹配 |
+| 副本克隆 | 克隆体保留原 `id`，`cope_version` 区分版本 |
+| 事实去重 | `HashSet<String>` 以 `id` (或 `id + 事实描述`) 为去重键 |
+| BFS 遍历 | 每跳锁定目标节点均以 `id` 为锚点 |
+
+#### HTTP 层 — id 不黑盒
+
+| 端点 | 锚点 | 说明 |
+|------|------|------|
+| `GET /query` | `code` 或关键词 | 搜索入口，返回结果包含 `id` |
+| `POST /entity/update` | `id` | `{"id": "P8A_001", "updates": {...}}` |
+| `POST /context` | `code` 或 `id` | 接受两者，内部先解析为 `id` 再展开 |
+| `POST /relationships/create` | `id` | `from_id` / `to_id` 定位节点 |
+| 前端展示 | `code` + `name` | 渲染列表/详情，`id` 仅透传不回显 |
+
+### 20.3 代码模式
+
+#### ✅ 正确模式
+
+```rust
+// 模式 1：通过 id 精确定位单条记录
+fn find_by_id(repo: &SharedRepository, id: &str) -> Option<Node> {
+    repo.get_nodes_by_property("id", &PropertyValue::from(id))
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+// 模式 2：更新以 id 为锚点
+fn update_entity(repo: &SharedRepository, id: &str, props: HashMap<String, PropertyValue>) {
+    // id 不可被覆盖
+    let mut props = props;
+    props.remove("id");
+    repo.update_node(id, &props);
+}
+
+// 模式 3：搜索用 code/name，返回带 id
+fn search_by_code(repo: &SharedRepository, code: &str) -> Vec<Node> {
+    repo.get_nodes_by_property("code", &PropertyValue::from(code))
+        .unwrap_or_default()
+    // 返回结果中 id 始终存在，前端可透过 id 做后续精确操作
+}
+
+// 模式 4：关系创建用 id 锚定
+fn create_relation(repo: &SharedRepository, from_id: &str, to_id: &str, rel_type: &str) {
+    // 先通过 id 确认两端节点存在
+    let from = find_by_id(repo, from_id);
+    let to = find_by_id(repo, to_id);
+    if from.is_some() && to.is_some() {
+        repo.create_relationship(from_id, to_id, rel_type);
+    }
+}
+```
+
+#### ❌ 反模式（禁止）
+
+```rust
+// 反模式 1：通过 code/name 执行更新/删除
+repo.delete_node_by_property("code", code);  // ❌ code 可重复/可修改，可能误删
+
+// 反模式 2：前端直接拼 id
+let id = request.body.get("id").unwrap();     // ❌ id 应为系统透传，不从前端输入生成
+
+// 反模式 3：用 name 做关系锚点
+MATCH (a {name: $name})-[r]->(b) ...           // ❌ name 不保证唯一
+
+// 反模式 4：搜索接口不返回 id
+{ "results": [{"code": "P8A", "name": "P-8A"}] }  // ❌ 前端无法用此结果做后续精确操作
+```
+
+### 20.4 字段优先级（搜索链）
+
+当查询接口同时收到 `id`、`code`、`name` 时，优先级如下：
+
+```
+1. id   ──→ 精确匹配，命中即返回（短路）
+2. code ──→ 精确匹配，命中即返回
+3. code ──→ 模糊匹配 (CONTAINS)
+4. name ──→ 模糊匹配 (CONTAINS)
+5. 其他搜索字段 (type / domain / leve 等)
+```
+
+**原则**：精确优先 → 业务编码其次 → 名称兜底。每一步有结果就短路返回，无结果则继续下一步。

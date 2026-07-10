@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 use ontology_storage::mapper::graph::node::Node;
 use ontology_storage::mapper::graph::property::PropertyValue;
+use ontology_storage::mapper::unified_mapping;
 use ontology_storage::repository::graph_store::GraphRepository;
 
 // ═══════════════════════════════════════════════════════════
@@ -191,7 +192,7 @@ impl<'a> ActionContext<'a> {
 
     /// 在图中查找实体
     pub fn find_entity(&self, code: &str) -> Option<Node> {
-        for label in &["Entity", "Event", "Patrol", "Strike", "Type", "Behavior"] {
+        for label in unified_mapping::DOMAIN_LABELS {
             let nodes = self.repo.get_nodes_by_label(label).ok()?;
             for n in &nodes {
                 if n.property("code").and_then(|v| v.as_str()) == Some(code) {
@@ -202,7 +203,9 @@ impl<'a> ActionContext<'a> {
         None
     }
 
-    /// 更新实体属性（delete + insert 方式）
+    /// 更新实体属性（delete + insert 方式）。
+    ///
+    /// 以 `id` 属性为技术锚点执行删除，`id` 不存在时回退到 `code`。
     pub fn update_entity(&self, code: &str, updates: HashMap<String, PropertyValue>) -> Result<(), String> {
         let entity = self.find_entity(code)
             .ok_or_else(|| format!("实体 '{}' 未找到", code))?;
@@ -212,7 +215,12 @@ impl<'a> ActionContext<'a> {
             new_props.insert(k, v);
         }
 
-        self.repo.delete_node(code)
+        // id 优先（技术锚点），code 兜底
+        let internal_id = entity
+            .property("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(code);
+        self.repo.delete_node(internal_id)
             .map_err(|e| format!("删除失败: {}", e))?;
         let updated = Node::new(entity.labels, new_props);
         self.repo.insert_node(&updated)

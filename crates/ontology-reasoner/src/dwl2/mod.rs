@@ -12,7 +12,5 @@
 pub mod ast;
 pub mod query;
 
-pub use ast::{
-    Cardinality, ClassExpression, PropertyRestriction, Quantifier,
-};
+pub use ast::{Cardinality, ClassExpression, PropertyRestriction, Quantifier};
 pub use query::Dwl2QueryEngine;

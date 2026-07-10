@@ -12,6 +12,7 @@ use crate::error::MappingError;
 use crate::mapper::graph::node::Node;
 use crate::mapper::graph::property::PropertyValue;
 use crate::mapper::graph::relationship::Relationship;
+use crate::mapper::unified_mapping;
 
 // ── 本体模型（最小化定义） ──
 
@@ -58,15 +59,24 @@ pub struct Individual {
 /// Class → Node: 标签统一为 `:Class`，IRI 和元数据存入属性
 pub fn class_to_node(class: &Class) -> Node {
     let mut props = HashMap::new();
-    props.insert("iri".to_string(), PropertyValue::from(class.iri.as_str()));
+    props.insert(
+        unified_mapping::IRI_KEY.to_string(),
+        PropertyValue::from(class.iri.as_str()),
+    );
     if let Some(ref lbl) = class.label {
-        props.insert("label".to_string(), PropertyValue::from(lbl.as_str()));
+        props.insert(
+            unified_mapping::LABEL_KEY.to_string(),
+            PropertyValue::from(lbl.as_str()),
+        );
     }
     if let Some(ref c) = class.comment {
-        props.insert("comment".to_string(), PropertyValue::from(c.as_str()));
+        props.insert(
+            unified_mapping::COMMENT_KEY.to_string(),
+            PropertyValue::from(c.as_str()),
+        );
     }
 
-    Node::new(vec!["Class".to_string()], props)
+    Node::new(vec![unified_mapping::CLASS_LABEL.to_string()], props)
 }
 
 /// Individual → Node: 标签为 `:Individual`
@@ -74,10 +84,13 @@ pub fn individual_to_node(ind: &Individual) -> Node {
     let mut props = HashMap::new();
     props.insert("iri".to_string(), PropertyValue::from(ind.iri.as_str()));
     if let Some(ref lbl) = ind.label {
-        props.insert("label".to_string(), PropertyValue::from(lbl.as_str()));
+        props.insert(
+            unified_mapping::LABEL_KEY.to_string(),
+            PropertyValue::from(lbl.as_str()),
+        );
     }
 
-    Node::new(vec!["Individual".to_string()], props)
+    Node::new(vec![unified_mapping::INDIVIDUAL_LABEL.to_string()], props)
 }
 
 /// ObjectProperty → Relationship 集合
@@ -99,7 +112,7 @@ pub fn object_property_to_relationships(
     if let Some(ref domain_iri) = prop.domain {
         rels.push(Relationship::new(
             domain_iri.as_str(),
-            "HAS_PROPERTY",
+            unified_mapping::HAS_PROPERTY_REL,
             prop.iri.as_str(),
             base_props.clone(),
         ));
@@ -109,7 +122,7 @@ pub fn object_property_to_relationships(
     if let Some(ref range_iri) = prop.range {
         rels.push(Relationship::new(
             prop.iri.as_str(),
-            "HAS_RANGE",
+            unified_mapping::HAS_RANGE_REL,
             range_iri.as_str(),
             base_props,
         ));
@@ -127,7 +140,7 @@ pub fn individual_to_relationships(ind: &Individual) -> Vec<Relationship> {
         props.insert("type".to_string(), PropertyValue::from("rdf:type"));
         rels.push(Relationship::new(
             ind.iri.as_str(),
-            "INSTANCE_OF",
+            unified_mapping::INSTANCE_OF_REL,
             class_iri.as_str(),
             props,
         ));
@@ -138,7 +151,7 @@ pub fn individual_to_relationships(ind: &Individual) -> Vec<Relationship> {
         props.insert("value".to_string(), value.clone());
         rels.push(Relationship::new(
             ind.iri.as_str(),
-            "HAS_VALUE",
+            unified_mapping::HAS_VALUE_REL,
             prop_iri.as_str(),
             props,
         ));

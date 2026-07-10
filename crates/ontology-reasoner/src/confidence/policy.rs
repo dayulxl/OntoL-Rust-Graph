@@ -28,27 +28,31 @@ impl SourceCategory {
             SourceCategory::Unknown => 0.20,
         }
     }
+}
 
-    /// 从字符串解析（用于 HTTP 参数）
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for SourceCategory {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "sonar" | "sonar_realtime" | "sonarrealtime" => Some(SourceCategory::SonarRealtime),
-            "satellite" | "sat" => Some(SourceCategory::Satellite),
-            "historical" | "history" | "hist" => Some(SourceCategory::Historical),
-            "unknown" | "?" => Some(SourceCategory::Unknown),
-            _ => None,
+            "sonar" | "sonar_realtime" | "sonarrealtime" => Ok(SourceCategory::SonarRealtime),
+            "satellite" | "sat" => Ok(SourceCategory::Satellite),
+            "historical" | "history" | "hist" => Ok(SourceCategory::Historical),
+            "unknown" | "?" => Ok(SourceCategory::Unknown),
+            _ => Err(format!("未知来源类别: {}", s)),
         }
     }
 }
 
 /// 作战模式 — 决定熔断阈值
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OperationMode {
     /// 战时 — 阈值 0.15（宽松，保留更多线索）
     WarFighting,
     /// 训练 — 阈值 0.50（严格，保证数据纯净）
     Training,
     /// 演习 — 阈值 0.30（默认）
+    #[default]
     Exercise,
 }
 
@@ -61,40 +65,28 @@ impl OperationMode {
             OperationMode::Exercise => 0.30,
         }
     }
+}
 
-    /// 从字符串解析（用于 HTTP 参数 / 环境变量）
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for OperationMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "warfighting" | "war" | "war_fighting" => Some(OperationMode::WarFighting),
-            "training" | "train" => Some(OperationMode::Training),
-            "exercise" | "ex" | "default" => Some(OperationMode::Exercise),
-            _ => None,
+            "warfighting" | "war" | "war_fighting" => Ok(OperationMode::WarFighting),
+            "training" | "train" => Ok(OperationMode::Training),
+            "exercise" | "ex" | "default" => Ok(OperationMode::Exercise),
+            _ => Err(format!("未知作战模式: {}", s)),
         }
     }
 }
 
-impl Default for OperationMode {
-    fn default() -> Self {
-        OperationMode::Exercise
-    }
-}
-
 /// 置信度策略 — 外部注入引擎
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfidencePolicy {
     /// 当前作战模式
     pub mode: OperationMode,
     /// 每类数据来源的权重覆盖（None = 使用默认权重）
     source_weight_overrides: std::collections::HashMap<SourceCategory, f64>,
-}
-
-impl Default for ConfidencePolicy {
-    fn default() -> Self {
-        Self {
-            mode: OperationMode::default(),
-            source_weight_overrides: std::collections::HashMap::new(),
-        }
-    }
 }
 
 impl ConfidencePolicy {
@@ -131,7 +123,8 @@ impl ConfidencePolicy {
 
     /// 覆盖某数据来源的权重
     pub fn set_source_weight(&mut self, source: SourceCategory, weight: f64) {
-        self.source_weight_overrides.insert(source, weight.clamp(0.0, 1.0));
+        self.source_weight_overrides
+            .insert(source, weight.clamp(0.0, 1.0));
     }
 
     /// 重置来源权重为默认值
@@ -143,6 +136,7 @@ impl ConfidencePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_mode_thresholds() {
@@ -181,17 +175,35 @@ mod tests {
 
     #[test]
     fn test_parse_operation_mode() {
-        assert_eq!(OperationMode::from_str("WarFighting"), Some(OperationMode::WarFighting));
-        assert_eq!(OperationMode::from_str("training"), Some(OperationMode::Training));
-        assert_eq!(OperationMode::from_str("ex"), Some(OperationMode::Exercise));
-        assert_eq!(OperationMode::from_str("unknown"), None);
+        assert_eq!(
+            OperationMode::from_str("WarFighting").ok(),
+            Some(OperationMode::WarFighting)
+        );
+        assert_eq!(
+            OperationMode::from_str("training").ok(),
+            Some(OperationMode::Training)
+        );
+        assert_eq!(
+            OperationMode::from_str("ex").ok(),
+            Some(OperationMode::Exercise)
+        );
+        assert!(OperationMode::from_str("unknown").is_err());
     }
 
     #[test]
     fn test_parse_source_category() {
-        assert_eq!(SourceCategory::from_str("sonar"), Some(SourceCategory::SonarRealtime));
-        assert_eq!(SourceCategory::from_str("sat"), Some(SourceCategory::Satellite));
-        assert_eq!(SourceCategory::from_str("hist"), Some(SourceCategory::Historical));
-        assert_eq!(SourceCategory::from_str("garbage"), None);
+        assert_eq!(
+            SourceCategory::from_str("sonar").ok(),
+            Some(SourceCategory::SonarRealtime)
+        );
+        assert_eq!(
+            SourceCategory::from_str("sat").ok(),
+            Some(SourceCategory::Satellite)
+        );
+        assert_eq!(
+            SourceCategory::from_str("hist").ok(),
+            Some(SourceCategory::Historical)
+        );
+        assert!(SourceCategory::from_str("garbage").is_err());
     }
 }

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use crate::mapper::graph::relationship::Relationship;
+use crate::mapper::unified_mapping;
 use crate::repository::graph_store::GraphRepository;
 
 use super::entity::{get_str, json_to_property};
@@ -64,11 +65,16 @@ pub fn resolve_node_id(
     spec: &serde_json::Value,
     prefix: &str,
 ) -> Result<String, String> {
-    let value = get_str(spec, prefix)
+    let value = get_str(spec, &format!("{}_{}", prefix, "id"))
         .or_else(|| get_str(spec, &format!("{}_{}", prefix, "code")))
         .or_else(|| get_str(spec, &format!("{}_{}", prefix, "name")))
-        .or_else(|| get_str(spec, &format!("{}_{}", prefix, "id")))
-        .ok_or_else(|| format!("'{}' or '{}_{}' is required", prefix, prefix, "code"))?;
+        .or_else(|| get_str(spec, prefix))
+        .ok_or_else(|| {
+            format!(
+                "'{}_{}' or '{}_{}' is required",
+                prefix, "id", prefix, "code"
+            )
+        })?;
 
     let label_key = format!("{}_{}", prefix, "label");
     let specified_label = get_str(spec, &label_key);
@@ -79,7 +85,11 @@ pub fn resolve_node_id(
     }
 
     // 自动查找：Entity → Type → Patrol
-    for label in &["Entity", "Type", "Patrol"] {
+    for label in &[
+        unified_mapping::ENTITY_LABEL,
+        unified_mapping::TYPE_LABEL,
+        unified_mapping::PATROL_LABEL,
+    ] {
         if let Some(id) = find_node_by_label(repo, label, value) {
             return Ok(id);
         }
@@ -89,21 +99,29 @@ pub fn resolve_node_id(
     Ok(value.to_string())
 }
 
-/// 在指定标签的节点中按 code / name 查找，返回 code 字段值作为标识符。
+/// 在指定标签的节点中按 code / name 查找，返回节点内部标识符（优先 `id` 属性，其次 `code`）。
 fn find_node_by_label(repo: &dyn GraphRepository, label: &str, value: &str) -> Option<String> {
     let nodes = repo.get_nodes_by_label(label).unwrap_or_default();
 
-    // 优先 code
+    // 优先 code 匹配
     for node in &nodes {
         if node.property("code").and_then(|v| v.as_str()) == Some(value) {
-            return node.property("code").and_then(|v| v.as_str()).map(|s| s.to_string());
+            return node
+                .property("id")
+                .and_then(|v| v.as_str())
+                .or_else(|| node.property("code").and_then(|v| v.as_str()))
+                .map(|s| s.to_string());
         }
     }
 
-    // 其次 name
+    // 其次 name 匹配
     for node in &nodes {
         if node.property("name").and_then(|v| v.as_str()) == Some(value) {
-            return node.property("code").and_then(|v| v.as_str()).map(|s| s.to_string());
+            return node
+                .property("id")
+                .and_then(|v| v.as_str())
+                .or_else(|| node.property("code").and_then(|v| v.as_str()))
+                .map(|s| s.to_string());
         }
     }
 

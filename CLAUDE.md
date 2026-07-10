@@ -78,10 +78,13 @@ ontologica_rust_graph/
 ├── .env.example                # 配置模板（敏感信息不入库）
 ├── crates/
 │   ├── ontology-storage/       # 存储层：GraphRepository trait + adapters
-│   │   └── src/adapters/
-│   │       ├── memgraph/       # MemgraphAdapter（Bolt 协议，内存图，主力）
-│   │       └── in_memory/      # InMemoryAdapter（测试用）
-│   ├── ontology-reasoner/      # 推理引擎：DWL2 + SWRL + Behavior + Graph + 置信度
+│   │   └── src/
+│   │       ├── mapper/
+│   │       │   └── unified_mapping.rs  # 统一映射层：图 ↔ OWL2 词汇表 SSOT
+│   │       └── adapters/
+│   │           ├── memgraph/          # MemgraphAdapter（Bolt 协议，内存图，主力）
+│   │           └── in_memory/         # InMemoryAdapter（测试用）
+│   ├── ontology-reasoner/      # 推理引擎：DWL2 + SWRL + Behavior + Graph + SHACL + 置信度
 │   └── ontology-server/        # HTTP API 服务（tiny_http）
 └── src/                        # 演示用 main.rs
 ```
@@ -251,29 +254,57 @@ curl http://localhost:8085/health
 
 ### 6.4 行为动作引擎（BehaviorAction）
 
-Entity 节点有 6 个**行为字段**（标准字段 23-28），全部用 SWRL 语法描述：
+Entity 节点有 6 个**行为字段**（OWL2 风格属性名），全部为 String 类型：
 
 | 字段 | 属性名 | 类型 | 作用 | 说明 |
 |------|--------|------|------|------|
-| 前置条件 | `precondition` | SWRL | **阻断** | SWRL 条件为 True 才触发后续效果 |
-| 效果 | `effect` | SWRL | **触发** | SWRL 结论，触发后写入图 |
-| 消耗 | `cost` | SWRL 文本 | 记录 | 资源消耗描述 |
-| 持续时间 | `duration` | int | 时序 | 秒 |
-| 优先级 | `priority` | int (0-10) | **排序** | 值高的优先执行，冲突时决定顺序 |
-| 组合动作 | `composedOf` | 分号分隔 | **跳转** | 关联 Entity code/名称列表，递归执行其行为 |
+| 触发前约束 | `hasPrecondition` | String (SHACL) | **阻断** | SHACL 执行语言；True/空→通过，False→停止此节点所有函数 |
+| 效果 | `hasEffect` | String | **触发** | 语言前缀路由（swrl:/sh:/owl2:），无前缀默认尝试 SWRL |
+| 消耗 | `hasCost` | String | 记录 | 前置条件通过时记录消耗描述 |
+| 持续时间 | `hasDuration` | String | 时序 | 秒；时长结束后触发效果；未写默认 0 秒即刻触发 |
+| 优先级 | `hasPriority` | String (0-10) | **排序** | 10 级最高；冲突时高优先级先行；未写默认 0 |
+| 组合动作 | `composedOf` | String | **跳转** | 分号分隔的 Entity code/名称列表，递归执行其行为 |
+
+**默认行为**：任何字段缺失或为空时，不影响其他字段的执行。
+只有 `hasPrecondition` 显式返回 False 时才会阻断整个节点的所有后续函数。
+
+#### hasPrecondition SHACL 约束语法
+
+| 表达式 | 含义 | 示例 |
+|--------|------|------|
+| (空) / `True` | 默认通过 | `""` 或 `"True"` |
+| `False` | 阻断停止 | `"False"` |
+| `prop = value` | 属性等于 | `"status = active"` |
+| `prop != value` | 属性不等于 | `"status != destroyed"` |
+| `prop >= N` | 数值大于等于 | `"power >= 50"` |
+| `prop <= N` | 数值小于等于 | `"speed <= 100"` |
+| `prop > N` | 数值大于 | `"confidence > 0.5"` |
+| `prop < N` | 数值小于 | `"power < 30"` |
+| `required(prop)` | 属性存在且非空 | `"required(code)"` |
+| `exists(prop)` | 属性存在 | `"exists(name)"` |
+| `prop matches "re"` | 正则匹配 | `"status matches \"^act\""` |
+
+#### hasEffect 语言前缀路由
+
+| 前缀 | 引擎 | 说明 |
+|------|------|------|
+| `swrl:` | SWRL 规则引擎 | 匹配前提 → 写入推导事实 |
+| `sh:` | SHACL 验证引擎 | 合规性检查 |
+| `owl2:` | DWL2 查询引擎 | 存在性检查 |
+| (无前缀) | SWRL (默认) | 尝试 SWRL 解析，失败则跳过 |
 
 **执行流程**：
 
 ```
 1. 扫描所有 Entity → 解析 6 个字段 → BehaviorAction
 2. 过滤：6 个字段全空的实体跳过，不参与计算
-3. 按 priority 降序排列
+3. 按 hasPriority 降序 → hasDuration 升序排列（高优先级先行，同优先级短时长先行）
 4. 对每个 action:
-   a. 解析 precondition SWRL → 在图匹配前提
-      - 有绑定 → 通过，继续
-      - 无绑定 → 阻断，跳过此实体
-   b. 解析 effect SWRL → 代入绑定 → 写入图
-   c. 递归处理 composedOf 链
+   a. 评估 hasPrecondition SHACL → True/空→通过，False→阻断停止
+   b. 等待 hasDuration 时长（默认 0 秒即即刻触发）
+   c. 解析 hasEffect 语言前缀 → 路由到对应引擎执行
+   d. 记录 hasCost
+   e. 递归处理 composedOf 链
 ```
 
 **Reasoner 调用**：
@@ -287,14 +318,17 @@ let results = reasoner.execute_behaviors(max_depth)?;
 
 ```rust
 struct BehaviorResult {
-    entity_code: String,           // 实体 code
-    triggered: bool,               // 是否触发
-    blocked_reason: Option<String>,// 阻断原因
-    binding_count: usize,          // 匹配绑定数
-    derived_count: usize,          // 推导事实数
-    priority: i64,                 // 优先级
-    cost_description: String,      // 消耗描述
-    duration_secs: i64,            // 持续时间
+    entity_code: String,              // 实体 code
+    triggered: bool,                  // 是否触发
+    blocked_reason: Option<String>,   // 阻断原因
+    binding_count: usize,             // 匹配绑定数
+    derived_count: usize,             // 推导事实数
+    priority_value: i64,              // 优先级数值
+    priority_text: String,            // 优先级原始文本
+    cost_description: String,         // 消耗描述
+    duration_text: String,            // 持续时间原始文本
+    duration_secs: i64,               // 持续时间秒数（解析后）
+    precondition_blocked: bool,       // 是否因 hasPrecondition 阻断
     composed_results: Vec<BehaviorResult>, // 级联子动作
 }
 ```
@@ -368,6 +402,32 @@ SWRL 规则执行分为两阶段：
 | ADR-004 | Entity 行为引擎（BehaviorAction）用 SWRL 驱动 6 字段 | 2026-07-05 | 生效中 |
 | ADR-005 | SWRL 规则并发执行（thread::scope） | 2026-07-05 | 生效中 |
 | ADR-006 | 场景版本隔离：全量克隆+副本守卫，不修改原数据 | 2026-07-05 | 生效中 |
+| ADR-007 | 统一映射层：W3C OWL2→属性图 SSOT，收拢~150处分散硬编码 | 2026-07-10 | 生效中 |
+
+## 8.1 统一映射层 (unified_mapping)
+
+自 ADR-007 起，所有图词汇表（节点标签、关系类型、属性键）定义为
+`ontology_storage::mapper::unified_mapping` 中的统一常量。禁止在其他模块中使用
+硬编码字符串字面量（如 `"Entity"`、`"INSTANCE_OF"`、`"iri"`）。
+
+**核心常量分组**：
+
+| 分组 | 用途 | 示例 |
+|------|------|------|
+| 节点标签 | `get_nodes_by_label()` | `ENTITY_LABEL`, `CLASS_LABEL`, `INDIVIDUAL_LABEL` |
+| 关系类型 | `get_relationships()`, `Relationship::simple()` | `INSTANCE_OF_REL`, `SUB_CLASS_OF_REL`, `HAS_PROPERTY_REL` |
+| 属性键 | `node.property()` | `IRI_KEY`, `LABEL_KEY`, `COMMENT_KEY` |
+| 预组合切片 | 循环遍历 | `DOMAIN_LABELS`, `OWL_NODE_LABELS` |
+
+**双向查找 API**（SHACL/LLM 用）：
+
+```rust
+use ontology_storage::mapper::unified_mapping;
+
+let entity = owl_entity_for_label("Class");        // Some(OwlEntityType::Class)
+let axiom  = owl_axiom_for_relation("INSTANCE_OF"); // Some(ClassAssertion)
+let cat    = categorize_property_key("label");     // Some(Annotation)
+```
 
 > 使用 `/architecture-decision-records` skill 在决策发生时自动记录。
 

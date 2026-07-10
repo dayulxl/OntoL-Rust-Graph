@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::error::StoreError;
 use crate::mapper::graph::node::Node;
-use crate::mapper::graph::relationship::Relationship;
 use crate::mapper::graph::pattern::GraphPattern;
+use crate::mapper::graph::relationship::Relationship;
 use crate::repository::transaction::Transaction;
 
 /// 属性图存储的核心抽象 Trait。

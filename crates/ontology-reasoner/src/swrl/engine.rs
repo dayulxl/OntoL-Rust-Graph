@@ -24,23 +24,21 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
+use ontology_storage::mapper::graph::pattern::{GraphPattern, NodePattern, RelationshipPattern};
 use ontology_storage::mapper::graph::property::PropertyValue;
-use ontology_storage::mapper::graph::pattern::{
-    GraphPattern, NodePattern, RelationshipPattern,
-};
+use ontology_storage::mapper::unified_mapping;
 use ontology_storage::repository::graph_store::SharedRepository;
 
 use crate::confidence::calculator::{ConfidenceCalculator, ConfidenceInput};
 use crate::confidence::fuse::ConfidenceFuse;
-use crate::error::ReasonerError;
-use crate::swrl::ast::{Atom, ExecutionStats, InferenceResult, Rule, VariableBinding};
-use crate::swrl::builtins::{BuiltinRegistry, BuiltinValue};
 use crate::confidence::policy::ConfidencePolicy;
 use crate::dwl2::ast::ClassExpression;
 use crate::dwl2::query::Dwl2QueryEngine;
+use crate::error::ReasonerError;
+use crate::swrl::ast::{Atom, ExecutionStats, InferenceResult, Rule, VariableBinding};
+use crate::swrl::builtins::{BuiltinRegistry, BuiltinValue};
 
 /// SWRL 推理引擎 — 持有图仓库、内置函数注册表和置信度评估器。
-
 pub struct SwrlEngine {
     repo: SharedRepository,
     builtins: BuiltinRegistry,
@@ -50,6 +48,9 @@ pub struct SwrlEngine {
     verbose: bool,
     policy: Option<ConfidencePolicy>,
     dwl2_engine: Option<Dwl2QueryEngine>,
+    /// 副本版本过滤：如果设置，查询和写入时只操作该版本的副本节点。
+    /// `None` 表示不过滤（向后兼容，操作全局图）。
+    cope_version: Option<String>,
 }
 
 impl SwrlEngine {
@@ -64,6 +65,7 @@ impl SwrlEngine {
             verbose: false,
             policy: None,
             dwl2_engine,
+            cope_version: None,
         }
     }
 
@@ -79,6 +81,16 @@ impl SwrlEngine {
 
     pub fn with_policy(mut self, policy: ConfidencePolicy) -> Self {
         self.policy = Some(policy);
+        self
+    }
+
+    /// 设置副本版本过滤 — 查询和写入时只操作该版本的副本节点。
+    ///
+    /// 当设置后：
+    /// - `match_class_atom` / `match_property_atom` 过滤只返回 `cope_version` 匹配的节点
+    /// - `insert_derived_facts` 写入时自动为新事实设置 `cope_version`
+    pub fn with_cope_version(mut self, ver: &str) -> Self {
+        self.cope_version = Some(ver.to_string());
         self
     }
 
@@ -103,7 +115,11 @@ impl SwrlEngine {
         if self.verbose {
             log::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log::info!("⚡ SWRL 推理引擎启动");
-            log::info!("   规则数: {}  最大迭代: {}", rules.len(), self.max_iterations);
+            log::info!(
+                "   规则数: {}  最大迭代: {}",
+                rules.len(),
+                self.max_iterations
+            );
             log::info!("   已推导事实缓存: {} 条", self.derived_facts.len());
         }
 
@@ -123,7 +139,10 @@ impl SwrlEngine {
                 for rule in rules {
                     handles.push(s.spawn(|| self.execute_rule(rule)));
                 }
-                handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap())
+                    .collect::<Vec<_>>()
             });
 
             // ── 串行写入阶段：去重 + 写入图（避免并发写冲突）──
@@ -142,7 +161,10 @@ impl SwrlEngine {
                                 if self.verbose {
                                     log::info!(
                                         "   ✅ [{}] 绑定={} 置信度={:.4} 新事实={}",
-                                        rule_name, sr.binding_count, sr.confidence, new_count
+                                        rule_name,
+                                        sr.binding_count,
+                                        sr.confidence,
+                                        new_count
                                     );
                                     for fact in &sr.derived_facts {
                                         log::info!("      ↳ {:?}", format_atom(fact));
@@ -152,25 +174,29 @@ impl SwrlEngine {
                             } else if self.verbose && !step_results.is_empty() {
                                 log::info!(
                                     "   ⏭  [{}] 绑定={} 置信度={:.4} (已有事实，跳过)",
-                                    rule_name, step_results[0].binding_count,
+                                    rule_name,
+                                    step_results[0].binding_count,
                                     step_results[0].confidence
                                 );
                             }
                         }
                         if self.verbose && step_results.is_empty() {
                             let elapsed = rule_start.elapsed().as_micros() as f64 / 1000.0;
-                            log::debug!(
-                                "   ⏹  [{}] 无匹配 ({} us)",
-                                rule_name, elapsed as u64
-                            );
+                            log::debug!("   ⏹  [{}] 无匹配 ({} us)", rule_name, elapsed as u64);
                         }
                     }
-                    Err(ReasonerError::ConfidenceFuse { confidence, threshold, rule_name: rn }) => {
+                    Err(ReasonerError::ConfidenceFuse {
+                        confidence,
+                        threshold,
+                        rule_name: rn,
+                    }) => {
                         stats.fuse_trips += 1;
                         if self.verbose {
                             log::warn!(
                                 "   🔥 [{}] 置信度熔断! {:.4} < {:.4}",
-                                rn, confidence, threshold
+                                rn,
+                                confidence,
+                                threshold
                             );
                         }
                         continue;
@@ -180,7 +206,11 @@ impl SwrlEngine {
             }
 
             if self.verbose {
-                log::info!("   ── 本迭代: +{} 新事实, 累计 {} ──", round_derived, self.derived_facts.len());
+                log::info!(
+                    "   ── 本迭代: +{} 新事实, 累计 {} ──",
+                    round_derived,
+                    self.derived_facts.len()
+                );
             }
 
             if self.derived_facts.len() == round_start_new_facts {
@@ -196,8 +226,13 @@ impl SwrlEngine {
         if self.verbose {
             log::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log::info!("📊 推理汇总:");
-            log::info!("   总迭代: {}  新事实: {}  熔断: {}  耗时: {} ms",
-                stats.total_steps, stats.total_derived, stats.fuse_trips, stats.total_ms);
+            log::info!(
+                "   总迭代: {}  新事实: {}  熔断: {}  耗时: {} ms",
+                stats.total_steps,
+                stats.total_derived,
+                stats.fuse_trips,
+                stats.total_ms
+            );
             if stats.total_steps >= self.max_iterations {
                 log::warn!("⚠ 达到最大迭代次数上限，可能未收敛!");
             }
@@ -221,15 +256,22 @@ impl SwrlEngine {
         if self.verbose {
             let match_ms = t0.elapsed().as_micros() as f64 / 1000.0;
             if bindings.is_empty() {
-                log::debug!("   🔍 [{}] 前提匹配: 0 绑定 ({:.1} ms)", rule_name, match_ms);
+                log::debug!(
+                    "   🔍 [{}] 前提匹配: 0 绑定 ({:.1} ms)",
+                    rule_name,
+                    match_ms
+                );
             } else {
                 log::info!(
                     "   🔍 [{}] 前提匹配: {} 绑定 ({:.1} ms)",
-                    rule_name, bindings.len(), match_ms
+                    rule_name,
+                    bindings.len(),
+                    match_ms
                 );
                 // 打印前 3 个绑定样例
                 for (i, binding) in bindings.iter().take(3).enumerate() {
-                    let vars: Vec<String> = binding.iter()
+                    let vars: Vec<String> = binding
+                        .iter()
                         .map(|(k, v)| format!("{}={}", k, v))
                         .collect();
                     log::debug!("     绑定#{}: {{ {} }}", i + 1, vars.join(", "));
@@ -265,9 +307,13 @@ impl SwrlEngine {
             if self.verbose {
                 log::info!(
                     "      📐 绑定#{}/{} 置信度={:.4} (match={:.2} card={:.2} prop={:.2} struct={:.2})",
-                    bi + 1, bindings.len(), confidence,
-                    conf_input.source_match, conf_input.source_cardinal,
-                    conf_input.source_property, conf_input.source_structural
+                    bi + 1,
+                    bindings.len(),
+                    confidence,
+                    conf_input.source_match,
+                    conf_input.source_cardinal,
+                    conf_input.source_property,
+                    conf_input.source_structural
                 );
             }
 
@@ -372,20 +418,50 @@ impl SwrlEngine {
         Ok(current)
     }
 
+    /// 检查节点是否匹配当前的 cope_version 过滤条件。
+    ///
+    /// - `cope_version` 为 `None` → 不过滤，始终返回 `true`
+    /// - `cope_version` 为 `Some(v)` → 只返回 `true` 当节点属性 `cope_version == v`
+    fn node_matches_cope_version(
+        &self,
+        node: &ontology_storage::mapper::graph::node::Node,
+    ) -> bool {
+        match &self.cope_version {
+            Some(v) => node
+                .property("cope_version")
+                .and_then(|pv| pv.as_str())
+                .map(|cv| cv == v.as_str())
+                .unwrap_or(false),
+            None => true,
+        }
+    }
+
     fn match_class_atom(&self, atom: &Atom) -> Result<Vec<VariableBinding>, ReasonerError> {
-        if let Atom::ClassAtom { class_iri, variable } = atom {
+        if let Atom::ClassAtom {
+            class_iri,
+            variable,
+        } = atom
+        {
             let pattern = GraphPattern::new(
-                NodePattern::with_label("Individual").with_variable("ind"),
-                RelationshipPattern::with_type("INSTANCE_OF").with_variable("r"),
-                NodePattern::with_label("Class")
+                NodePattern::with_label(unified_mapping::INDIVIDUAL_LABEL).with_variable("ind"),
+                RelationshipPattern::with_type(unified_mapping::INSTANCE_OF_REL).with_variable("r"),
+                NodePattern::with_label(unified_mapping::CLASS_LABEL)
                     .with_variable("c")
-                    .with_property("iri", PropertyValue::from(class_iri.as_str())),
+                    .with_property(
+                        unified_mapping::IRI_KEY,
+                        PropertyValue::from(class_iri.as_str()),
+                    ),
             );
             let results = self.repo.query_pattern(&pattern)?;
             Ok(results
                 .iter()
                 .filter_map(|(ind, _, _)| {
-                    let iri = ind.property("iri").and_then(|v| v.as_str())?;
+                    if !self.node_matches_cope_version(ind) {
+                        return None;
+                    }
+                    let iri = ind
+                        .property(unified_mapping::IRI_KEY)
+                        .and_then(|v| v.as_str())?;
                     let mut b = HashMap::new();
                     b.insert(variable.clone(), iri.to_string());
                     Some(b)
@@ -398,18 +474,30 @@ impl SwrlEngine {
 
     fn match_property_atom(&self, atom: &Atom) -> Result<Vec<VariableBinding>, ReasonerError> {
         match atom {
-            Atom::ObjectPropertyAtom { property_iri, subject, object } => {
+            Atom::ObjectPropertyAtom {
+                property_iri,
+                subject,
+                object,
+            } => {
                 let pattern = GraphPattern::new(
-                    NodePattern::with_label("Individual").with_variable("s"),
+                    NodePattern::with_label(unified_mapping::INDIVIDUAL_LABEL).with_variable("s"),
                     RelationshipPattern::with_type(property_iri.as_str()).with_variable("r"),
-                    NodePattern::with_label("Individual").with_variable("o"),
+                    NodePattern::with_label(unified_mapping::INDIVIDUAL_LABEL).with_variable("o"),
                 );
                 let results = self.repo.query_pattern(&pattern)?;
                 Ok(results
                     .iter()
                     .filter_map(|(s, _, o)| {
-                        let s_iri = s.property("iri").and_then(|v| v.as_str())?;
-                        let o_iri = o.property("iri").and_then(|v| v.as_str())?;
+                        if !self.node_matches_cope_version(s) || !self.node_matches_cope_version(o)
+                        {
+                            return None;
+                        }
+                        let s_iri = s
+                            .property(unified_mapping::IRI_KEY)
+                            .and_then(|v| v.as_str())?;
+                        let o_iri = o
+                            .property(unified_mapping::IRI_KEY)
+                            .and_then(|v| v.as_str())?;
                         let mut b = HashMap::new();
                         b.insert(subject.clone(), s_iri.to_string());
                         b.insert(object.clone(), o_iri.to_string());
@@ -417,30 +505,48 @@ impl SwrlEngine {
                     })
                     .collect())
             }
-            Atom::DataPropertyAtom { property_iri, subject, value } => {
+            Atom::DataPropertyAtom {
+                property_iri,
+                subject,
+                value,
+            } => {
                 let pattern = GraphPattern::new(
-                    NodePattern::with_label("Individual").with_variable("s"),
-                    RelationshipPattern::with_type("HAS_VALUE").with_variable("r"),
-                    NodePattern::with_label("Property").with_variable("p"),
+                    NodePattern::with_label(unified_mapping::INDIVIDUAL_LABEL).with_variable("s"),
+                    RelationshipPattern::with_type(unified_mapping::HAS_VALUE_REL)
+                        .with_variable("r"),
+                    NodePattern::with_label(unified_mapping::PROPERTY_LABEL).with_variable("p"),
                 );
                 let results = self.repo.query_pattern(&pattern)?;
                 Ok(results
                     .iter()
                     .filter_map(|(s, rels, p)| {
-                        let s_iri = s.property("iri").and_then(|v| v.as_str())?;
-                        let p_iri = p.property("iri").and_then(|v| v.as_str())?;
-                        if p_iri != property_iri.as_str() { return None; }
+                        if !self.node_matches_cope_version(s) {
+                            return None;
+                        }
+                        let s_iri = s
+                            .property(unified_mapping::IRI_KEY)
+                            .and_then(|v| v.as_str())?;
+                        let p_iri = p
+                            .property(unified_mapping::IRI_KEY)
+                            .and_then(|v| v.as_str())?;
+                        if p_iri != property_iri.as_str() {
+                            return None;
+                        }
                         let rel = rels.first()?;
-                        let data_val = rel.property("value").and_then(|v| match v {
-                            PropertyValue::String(s) => Some(s.clone()),
-                            PropertyValue::Integer(i) => Some(i.to_string()),
-                            PropertyValue::Float(f) => Some(f.to_string()),
-                            PropertyValue::Boolean(b) => Some(b.to_string()),
-                            _ => None,
-                        })?;
+                        let data_val =
+                            rel.property(unified_mapping::VALUE_KEY)
+                                .and_then(|v| match v {
+                                    PropertyValue::String(s) => Some(s.clone()),
+                                    PropertyValue::Integer(i) => Some(i.to_string()),
+                                    PropertyValue::Float(f) => Some(f.to_string()),
+                                    PropertyValue::Boolean(b) => Some(b.to_string()),
+                                    _ => None,
+                                })?;
                         let mut b = HashMap::new();
                         b.insert(subject.clone(), s_iri.to_string());
-                        if value.starts_with('?') { b.insert(value.clone(), data_val); }
+                        if value.starts_with('?') {
+                            b.insert(value.clone(), data_val);
+                        }
                         Some(b)
                     })
                     .collect())
@@ -450,17 +556,25 @@ impl SwrlEngine {
     }
 
     fn filter_builtin_by(&self, bindings: &mut Vec<VariableBinding>, atom: &Atom) {
-        if let Atom::Builtin { builtin_iri, arguments } = atom {
+        if let Atom::Builtin {
+            builtin_iri,
+            arguments,
+        } = atom
+        {
             bindings.retain(|binding| {
-                let args: Vec<BuiltinValue> = arguments.iter().map(|arg| {
-                    if arg.starts_with('?') {
-                        binding.get(arg)
-                            .map(|v| BuiltinValue::String(v.clone()))
-                            .unwrap_or(BuiltinValue::Unbound)
-                    } else {
-                        parse_literal(arg)
-                    }
-                }).collect();
+                let args: Vec<BuiltinValue> = arguments
+                    .iter()
+                    .map(|arg| {
+                        if arg.starts_with('?') {
+                            binding
+                                .get(arg)
+                                .map(|v| BuiltinValue::String(v.clone()))
+                                .unwrap_or(BuiltinValue::Unbound)
+                        } else {
+                            parse_literal(arg)
+                        }
+                    })
+                    .collect();
                 match self.builtins.execute(builtin_iri, &args) {
                     Ok(r) => match r {
                         crate::swrl::builtins::BuiltinResult::Boolean(b) => b,
@@ -480,29 +594,57 @@ impl SwrlEngine {
     fn substitute_atom(&self, atom: &Atom, binding: &VariableBinding) -> Atom {
         let r = |v: &str| resolve_or_keep(binding, v);
         match atom {
-            Atom::ClassAtom { class_iri, variable } => Atom::ClassAtom {
-                class_iri: class_iri.clone(), variable: r(variable),
+            Atom::ClassAtom {
+                class_iri,
+                variable,
+            } => Atom::ClassAtom {
+                class_iri: class_iri.clone(),
+                variable: r(variable),
             },
-            Atom::ObjectPropertyAtom { property_iri, subject, object } => {
-                Atom::ObjectPropertyAtom {
-                    property_iri: property_iri.clone(),
-                    subject: r(subject), object: r(object),
-                }
-            }
-            Atom::DataPropertyAtom { property_iri, subject, value } => Atom::DataPropertyAtom {
+            Atom::ObjectPropertyAtom {
+                property_iri,
+                subject,
+                object,
+            } => Atom::ObjectPropertyAtom {
                 property_iri: property_iri.clone(),
                 subject: r(subject),
-                value: if value.starts_with('?') { r(value) } else { value.clone() },
+                object: r(object),
             },
-            Atom::SameAs(a, b) => Atom::SameAs(r(&a), r(&b)),
-            Atom::DifferentFrom(a, b) => Atom::DifferentFrom(r(&a), r(&b)),
-            Atom::Builtin { builtin_iri, arguments } => Atom::Builtin {
+            Atom::DataPropertyAtom {
+                property_iri,
+                subject,
+                value,
+            } => Atom::DataPropertyAtom {
+                property_iri: property_iri.clone(),
+                subject: r(subject),
+                value: if value.starts_with('?') {
+                    r(value)
+                } else {
+                    value.clone()
+                },
+            },
+            Atom::SameAs(a, b) => Atom::SameAs(r(a), r(b)),
+            Atom::DifferentFrom(a, b) => Atom::DifferentFrom(r(a), r(b)),
+            Atom::Builtin {
+                builtin_iri,
+                arguments,
+            } => Atom::Builtin {
                 builtin_iri: builtin_iri.clone(),
-                arguments: arguments.iter().map(|arg| {
-                    if arg.starts_with('?') { r(arg) } else { arg.clone() }
-                }).collect(),
+                arguments: arguments
+                    .iter()
+                    .map(|arg| {
+                        if arg.starts_with('?') {
+                            r(arg)
+                        } else {
+                            arg.clone()
+                        }
+                    })
+                    .collect(),
             },
-            Atom::Query { dwl2_expression, result_variable } => Atom::Query {
+            Atom::Query {
+                dwl2_expression,
+                result_variable,
+            } => Atom::Query {
                 dwl2_expression: dwl2_expression.clone(),
                 result_variable: r(result_variable),
             },
@@ -511,17 +653,26 @@ impl SwrlEngine {
 
     /// 匹配 DWL2 Query 原子 — 执行 ClassExpression 检索
     fn match_query_atom(&self, atom: &Atom) -> Result<Vec<VariableBinding>, ReasonerError> {
-        if let Atom::Query { dwl2_expression, result_variable } = atom {
+        if let Atom::Query {
+            dwl2_expression,
+            result_variable,
+        } = atom
+        {
             let expr = ClassExpression::from_key(dwl2_expression)
                 .map_err(|e| ReasonerError::SwrlExecution(format!("Query parse: {}", e)))?;
-            let engine = self.dwl2_engine.as_ref()
+            let engine = self
+                .dwl2_engine
+                .as_ref()
                 .ok_or_else(|| ReasonerError::SwrlExecution("DWL2 engine not available".into()))?;
             let instances = engine.retrieve_instances(&expr)?;
-            Ok(instances.into_iter().map(|iri| {
-                let mut b = HashMap::new();
-                b.insert(result_variable.clone(), iri);
-                b
-            }).collect())
+            Ok(instances
+                .into_iter()
+                .map(|iri| {
+                    let mut b = HashMap::new();
+                    b.insert(result_variable.clone(), iri);
+                    b
+                })
+                .collect())
         } else {
             Err(ReasonerError::SwrlExecution("Expected Query atom".into()))
         }
@@ -531,21 +682,45 @@ impl SwrlEngine {
         let mut count = 0;
         for fact in facts {
             let key = fact_key(fact);
-            if self.derived_facts.contains(&key) { continue; }
+            if self.derived_facts.contains(&key) {
+                continue;
+            }
             match fact {
-                Atom::ClassAtom { class_iri, variable } => {
-                    self.repo.insert_relationship(
-                        &ontology_storage::mapper::graph::relationship::Relationship::simple(
-                            variable, "INSTANCE_OF", class_iri,
-                        ),
-                    )?;
+                Atom::ClassAtom {
+                    class_iri,
+                    variable,
+                } => {
+                    let mut rel_props = HashMap::new();
+                    // 设置 cope_version 以标记该事实属于哪个版本
+                    if let Some(ref cv) = self.cope_version {
+                        rel_props
+                            .insert("cope_version".to_string(), PropertyValue::from(cv.as_str()));
+                    }
+                    let rel = ontology_storage::mapper::graph::relationship::Relationship {
+                        rel_type: unified_mapping::INSTANCE_OF_REL.to_string(),
+                        start_node_id: variable.clone(),
+                        end_node_id: class_iri.clone(),
+                        properties: rel_props,
+                    };
+                    self.repo.insert_relationship(&rel)?;
                 }
-                Atom::ObjectPropertyAtom { property_iri, subject, object } => {
-                    self.repo.insert_relationship(
-                        &ontology_storage::mapper::graph::relationship::Relationship::simple(
-                            subject, property_iri, object,
-                        ),
-                    )?;
+                Atom::ObjectPropertyAtom {
+                    property_iri,
+                    subject,
+                    object,
+                } => {
+                    let mut rel_props = HashMap::new();
+                    if let Some(ref cv) = self.cope_version {
+                        rel_props
+                            .insert("cope_version".to_string(), PropertyValue::from(cv.as_str()));
+                    }
+                    let rel = ontology_storage::mapper::graph::relationship::Relationship {
+                        rel_type: property_iri.clone(),
+                        start_node_id: subject.clone(),
+                        end_node_id: object.clone(),
+                        properties: rel_props,
+                    };
+                    self.repo.insert_relationship(&rel)?;
                 }
                 _ => {}
             }
@@ -564,9 +739,9 @@ fn join_bindings(left: &[VariableBinding], right: &[VariableBinding]) -> Vec<Var
     let mut result = Vec::new();
     for lb in left {
         for rb in right {
-            let compatible = lb.iter().all(|(var, val)| {
-                rb.get(var).map_or(true, |rv| rv == val)
-            });
+            let compatible = lb
+                .iter()
+                .all(|(var, val)| rb.get(var).is_none_or(|rv| rv == val));
             if compatible {
                 let mut merged = lb.clone();
                 for (k, v) in rb {
@@ -581,9 +756,9 @@ fn join_bindings(left: &[VariableBinding], right: &[VariableBinding]) -> Vec<Var
 
 fn filter_equality(bindings: &mut Vec<VariableBinding>, atom: &Atom) {
     match atom {
-        Atom::SameAs(a, b) => bindings.retain(|binding| {
-            resolve_var(binding, a) == resolve_var(binding, b)
-        }),
+        Atom::SameAs(a, b) => {
+            bindings.retain(|binding| resolve_var(binding, a) == resolve_var(binding, b))
+        }
         Atom::DifferentFrom(a, b) => bindings.retain(|binding| {
             let va = resolve_var(binding, a);
             let vb = resolve_var(binding, b);
@@ -594,7 +769,11 @@ fn filter_equality(bindings: &mut Vec<VariableBinding>, atom: &Atom) {
 }
 
 fn resolve_var(binding: &VariableBinding, var: &str) -> Option<String> {
-    if var.starts_with('?') { binding.get(var).cloned() } else { Some(var.to_string()) }
+    if var.starts_with('?') {
+        binding.get(var).cloned()
+    } else {
+        Some(var.to_string())
+    }
 }
 
 fn resolve_or_keep(binding: &VariableBinding, var: &str) -> String {
@@ -602,31 +781,54 @@ fn resolve_or_keep(binding: &VariableBinding, var: &str) -> String {
 }
 
 fn parse_literal(s: &str) -> BuiltinValue {
-    if let Ok(i) = s.parse::<i64>() { BuiltinValue::Integer(i) }
-    else if let Ok(f) = s.parse::<f64>() { BuiltinValue::Float(f) }
-    else if s == "true" { BuiltinValue::Boolean(true) }
-    else if s == "false" { BuiltinValue::Boolean(false) }
-    else { BuiltinValue::String(s.to_string()) }
+    if let Ok(i) = s.parse::<i64>() {
+        BuiltinValue::Integer(i)
+    } else if let Ok(f) = s.parse::<f64>() {
+        BuiltinValue::Float(f)
+    } else if s == "true" {
+        BuiltinValue::Boolean(true)
+    } else if s == "false" {
+        BuiltinValue::Boolean(false)
+    } else {
+        BuiltinValue::String(s.to_string())
+    }
 }
 
 /// 格式化 Atom 为可读字符串（用于日志输出）
 fn format_atom(atom: &Atom) -> String {
     match atom {
-        Atom::ClassAtom { class_iri, variable } => {
+        Atom::ClassAtom {
+            class_iri,
+            variable,
+        } => {
             format!("{}({})", class_iri, variable)
         }
-        Atom::ObjectPropertyAtom { property_iri, subject, object } => {
+        Atom::ObjectPropertyAtom {
+            property_iri,
+            subject,
+            object,
+        } => {
             format!("{}({}, {})", property_iri, subject, object)
         }
-        Atom::DataPropertyAtom { property_iri, subject, value } => {
+        Atom::DataPropertyAtom {
+            property_iri,
+            subject,
+            value,
+        } => {
             format!("{}({}, {})", property_iri, subject, value)
         }
         Atom::SameAs(a, b) => format!("sameAs({}, {})", a, b),
         Atom::DifferentFrom(a, b) => format!("differentFrom({}, {})", a, b),
-        Atom::Builtin { builtin_iri, arguments } => {
+        Atom::Builtin {
+            builtin_iri,
+            arguments,
+        } => {
             format!("{}({})", builtin_iri, arguments.join(", "))
         }
-        Atom::Query { dwl2_expression, result_variable } => {
+        Atom::Query {
+            dwl2_expression,
+            result_variable,
+        } => {
             format!("Query({}, {})", dwl2_expression, result_variable)
         }
     }
@@ -634,37 +836,55 @@ fn format_atom(atom: &Atom) -> String {
 
 fn fact_key(fact: &Atom) -> String {
     match fact {
-        Atom::ClassAtom { class_iri, variable } => format!("class:{}:{}", variable, class_iri),
-        Atom::ObjectPropertyAtom { property_iri, subject, object } =>
-            format!("prop:{}:{}:{}", subject, property_iri, object),
-        Atom::DataPropertyAtom { property_iri, subject, value } =>
-            format!("dp:{}:{}:{}", subject, property_iri, value),
+        Atom::ClassAtom {
+            class_iri,
+            variable,
+        } => format!("class:{}:{}", variable, class_iri),
+        Atom::ObjectPropertyAtom {
+            property_iri,
+            subject,
+            object,
+        } => format!("prop:{}:{}:{}", subject, property_iri, object),
+        Atom::DataPropertyAtom {
+            property_iri,
+            subject,
+            value,
+        } => format!("dp:{}:{}:{}", subject, property_iri, value),
         _ => format!("other:{:?}", fact),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use ontology_storage::adapters::in_memory::executor::InMemoryAdapter;
     use ontology_storage::mapper::graph::node::Node;
     use ontology_storage::mapper::graph::property::PropertyValue;
     use ontology_storage::mapper::graph::relationship::Relationship;
     use ontology_storage::repository::graph_store::GraphRepository;
+    use std::sync::Arc;
 
-    use std::collections::HashMap;
+    use ontology_storage::mapper::unified_mapping;
     use ontology_storage::repository::graph_store::SharedRepository;
+    use std::collections::HashMap;
 
-    use crate::swrl::ast::{Atom, Rule};
     use super::SwrlEngine;
+    use crate::swrl::ast::{Atom, Rule};
 
     fn setup_family_repo() -> SharedRepository {
         let adapter = Arc::new(InMemoryAdapter::new());
 
         for class_iri in &["http://ex#Person", "http://ex#Uncle"] {
             let mut props = HashMap::new();
-            props.insert("iri".to_string(), PropertyValue::from(*class_iri));
-            adapter.insert_node(&Node::new(vec!["Class".to_string()], props)).unwrap();
+            props.insert(
+                unified_mapping::IRI_KEY.to_string(),
+                PropertyValue::from(*class_iri),
+            );
+            adapter
+                .insert_node(&Node::new(
+                    vec![unified_mapping::CLASS_LABEL.to_string()],
+                    props,
+                ))
+                .unwrap();
         }
 
         for (iri, label) in &[
@@ -673,9 +893,20 @@ mod tests {
             ("http://ex#Charlie", "Charlie"),
         ] {
             let mut props = HashMap::new();
-            props.insert("iri".to_string(), PropertyValue::from(*iri));
-            props.insert("label".to_string(), PropertyValue::from(*label));
-            adapter.insert_node(&Node::new(vec!["Individual".to_string()], props)).unwrap();
+            props.insert(
+                unified_mapping::IRI_KEY.to_string(),
+                PropertyValue::from(*iri),
+            );
+            props.insert(
+                unified_mapping::LABEL_KEY.to_string(),
+                PropertyValue::from(*label),
+            );
+            adapter
+                .insert_node(&Node::new(
+                    vec![unified_mapping::INDIVIDUAL_LABEL.to_string()],
+                    props,
+                ))
+                .unwrap();
         }
 
         for (ind, cls) in &[
@@ -683,15 +914,29 @@ mod tests {
             ("http://ex#Bob", "http://ex#Person"),
             ("http://ex#Charlie", "http://ex#Person"),
         ] {
-            adapter.insert_relationship(&Relationship::simple(*ind, "INSTANCE_OF", *cls)).unwrap();
+            adapter
+                .insert_relationship(&Relationship::simple(
+                    *ind,
+                    unified_mapping::INSTANCE_OF_REL,
+                    *cls,
+                ))
+                .unwrap();
         }
 
-        adapter.insert_relationship(&Relationship::simple(
-            "http://ex#Alice", "hasParent", "http://ex#Bob",
-        )).unwrap();
-        adapter.insert_relationship(&Relationship::simple(
-            "http://ex#Bob", "hasBrother", "http://ex#Charlie",
-        )).unwrap();
+        adapter
+            .insert_relationship(&Relationship::simple(
+                "http://ex#Alice",
+                "hasParent",
+                "http://ex#Bob",
+            ))
+            .unwrap();
+        adapter
+            .insert_relationship(&Relationship::simple(
+                "http://ex#Bob",
+                "hasBrother",
+                "http://ex#Charlie",
+            ))
+            .unwrap();
 
         adapter
     }
@@ -701,18 +946,26 @@ mod tests {
         let repo = setup_family_repo();
         let mut engine = SwrlEngine::new(repo);
 
-        let rule = Rule::new("uncle_rule", vec![
-            Atom::ObjectPropertyAtom {
-                property_iri: "hasParent".into(), subject: "?x".into(), object: "?y".into(),
-            },
-            Atom::ObjectPropertyAtom {
-                property_iri: "hasBrother".into(), subject: "?y".into(), object: "?z".into(),
-            },
-        ], vec![
-            Atom::ObjectPropertyAtom {
-                property_iri: "hasUncle".into(), subject: "?x".into(), object: "?z".into(),
-            },
-        ]);
+        let rule = Rule::new(
+            "uncle_rule",
+            vec![
+                Atom::ObjectPropertyAtom {
+                    property_iri: "hasParent".into(),
+                    subject: "?x".into(),
+                    object: "?y".into(),
+                },
+                Atom::ObjectPropertyAtom {
+                    property_iri: "hasBrother".into(),
+                    subject: "?y".into(),
+                    object: "?z".into(),
+                },
+            ],
+            vec![Atom::ObjectPropertyAtom {
+                property_iri: "hasUncle".into(),
+                subject: "?x".into(),
+                object: "?z".into(),
+            }],
+        );
 
         let (_results, stats) = engine.execute_rules(&[rule]).unwrap();
         assert!(stats.total_derived >= 1);
@@ -730,11 +983,17 @@ mod tests {
         let repo = setup_family_repo();
         let mut engine = SwrlEngine::new(repo).with_max_iterations(5);
 
-        let rule = Rule::new("terminates", vec![
-            Atom::ClassAtom { class_iri: "http://ex#Person".into(), variable: "?x".into() },
-        ], vec![
-            Atom::ClassAtom { class_iri: "http://ex#Person".into(), variable: "?x".into() },
-        ]);
+        let rule = Rule::new(
+            "terminates",
+            vec![Atom::ClassAtom {
+                class_iri: "http://ex#Person".into(),
+                variable: "?x".into(),
+            }],
+            vec![Atom::ClassAtom {
+                class_iri: "http://ex#Person".into(),
+                variable: "?x".into(),
+            }],
+        );
 
         let (_results, stats) = engine.execute_rules(&[rule]).unwrap();
         assert!(stats.total_steps <= 5);

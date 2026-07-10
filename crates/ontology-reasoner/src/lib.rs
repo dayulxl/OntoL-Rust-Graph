@@ -14,6 +14,13 @@
 //! │         │                 │                    │           │
 //! │         └─────────────────┼────────────────────┘           │
 //! │                           │                                │
+//! │  ┌──────────────┐         │                                │
+//! │  │ SHACL Engine │         │                                │
+//! │  │  (validate)  │         │                                │
+//! │  └──────┬───────┘         │                                │
+//! │         │                 │                                │
+//! │         └─────────────────┼────────────────────┘           │
+//! │                           │                                │
 //! │                    ┌──────▼──────┐                         │
 //! │                    │  GraphRepo  │  (property graph)       │
 //! │                    └─────────────┘                         │
@@ -54,8 +61,10 @@ pub mod confidence;
 pub mod dwl2;
 pub mod error;
 pub mod graph;
+pub mod language;
 pub mod logger;
 pub mod query_plan;
+pub mod shacl;
 pub mod spatial;
 pub mod swrl;
 pub mod timeline;
@@ -63,18 +72,27 @@ pub mod timeline;
 mod reasoner;
 
 pub use confidence::calculator::{ConfidenceCalculator, ConfidenceInput, ConfidenceWeights};
-pub use confidence::fuse::{ConfidenceFuse, FuseState, CONFIDENCE_THRESHOLD};
+pub use confidence::fuse::{CONFIDENCE_THRESHOLD, ConfidenceFuse, FuseState};
 pub use confidence::policy::{ConfidencePolicy, OperationMode, SourceCategory};
 pub use dwl2::ast::{
-    Cardinality, ClassExpression, Dwl2Query, Dwl2Result, PropertyRestriction, Quantifier,
-    QueryType,
+    Cardinality, ClassExpression, Dwl2Query, Dwl2Result, PropertyRestriction, Quantifier, QueryType,
 };
 pub use dwl2::query::Dwl2QueryEngine;
-pub use query_plan::{QueryPlan, QueryResult};
 pub use error::ReasonerError;
-pub use reasoner::{Reasoner, ReasonerBuilder, ReasonerConfig, ReasonerReport};
+pub use language::{
+    LanguagePrefix, ParsedExpression, group_expressions, parse_language_expression,
+};
+pub use query_plan::{QueryPlan, QueryResult};
+pub use reasoner::{
+    ReasonOnNodesReport, ReasonOnNodesRequest, Reasoner, ReasonerBuilder, ReasonerConfig,
+    ReasonerReport,
+};
 pub use spatial::haversine_m;
 pub use swrl::ast::{Atom, ExecutionStats, InferenceResult, Rule, VariableBinding};
+pub use swrl::behavior::{
+    BehaviorAction, BehaviorResult, evaluate_shacl_precondition, execute_behaviors_batch,
+    execute_effect, parse_behavior,
+};
 pub use swrl::builtins::{BuiltinRegistry, BuiltinResult, BuiltinValue};
 pub use swrl::engine::SwrlEngine;
 pub use swrl::parser::SwrlParser;
@@ -82,11 +100,18 @@ pub use timeline::engine::TimelineEngine;
 pub use timeline::model::{Segment, TimelineInput, TimelineResult, WaypointInput};
 
 pub use graph::detector::{DefaultStateChangeDetector, StateChangeDetector};
-pub use graph::explorer::{
-    Direction, ExploreConfig, ExploreHop, ExploreResult, GraphExplorer,
-};
+pub use graph::explorer::{Direction, ExploreConfig, ExploreHop, ExploreResult, GraphExplorer};
 pub use graph::util::{
-    clone_all_for_version, delete_by_cope_version, ensure_cope_version, find_entity_any,
-    find_incoming_relationships, find_matching_rules, get_type_ancestors, predict_next_steps,
-    prop_as_f64, summarize_relations, truncate_str, update_entity_properties, RelCount, RuleMatch,
+    RelCount, RuleMatch, clone_all_for_version, clone_nodes_selective, delete_by_cope_version,
+    ensure_cope_version, find_entity_any, find_incoming_relationships, find_matching_rules,
+    get_type_ancestors, predict_next_steps, prop_as_f64, summarize_relations, truncate_str,
+    update_entity_properties,
 };
+
+pub use shacl::ast::{
+    Constraint, NodeKind, NodeShape, PropertyPath, PropertyShape, Severity, Shape, ShapesGraph,
+    Target,
+};
+pub use shacl::engine::ShaclEngine;
+pub use shacl::error::ShaclError;
+pub use shacl::result::{ValidationReport, ValidationResult};

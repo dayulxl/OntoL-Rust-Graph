@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::StoreError;
 use crate::mapper::graph::node::Node;
-use crate::mapper::graph::relationship::Relationship;
 use crate::mapper::graph::pattern::GraphPattern;
+use crate::mapper::graph::relationship::Relationship;
 use crate::repository::graph_store::GraphRepository;
 use crate::repository::transaction::Transaction;
 
@@ -26,7 +26,8 @@ impl InMemoryAdapter {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, InMemoryGraph>, StoreError> {
-        self.graph.lock()
+        self.graph
+            .lock()
             .map_err(|e| StoreError::Transaction(format!("Mutex poisoned: {}", e)))
     }
 }
@@ -51,11 +52,7 @@ impl GraphRepository for InMemoryAdapter {
 
     fn get_nodes_by_label(&self, label: &str) -> Result<Vec<Node>, StoreError> {
         let g = self.lock()?;
-        let nodes: Vec<Node> = g
-            .get_nodes_by_label(label)
-            .into_iter()
-            .cloned()
-            .collect();
+        let nodes: Vec<Node> = g.get_nodes_by_label(label).into_iter().cloned().collect();
         Ok(nodes)
     }
 
@@ -65,10 +62,21 @@ impl GraphRepository for InMemoryAdapter {
         rel_type: Option<&str>,
     ) -> Result<Vec<Relationship>, StoreError> {
         let g = self.lock()?;
-        let edges = g.outgoing_edges(node_id);
+        // 多级匹配找到节点的实际 IRI 键（对标 Memgraph MATCH ... WHERE n.id=$id OR n.code=$id）
+        let actual_key = g
+            .get_node(node_id)
+            .and_then(|n| {
+                n.property("iri")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| n.property("id").and_then(|v| v.as_str()))
+                    .or_else(|| n.property("code").and_then(|v| v.as_str()))
+            })
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| node_id.to_string());
+        let edges = g.outgoing_edges(&actual_key);
         let filtered: Vec<Relationship> = edges
             .into_iter()
-            .filter(|r| rel_type.map_or(true, |rt| r.rel_type == rt))
+            .filter(|r| rel_type.is_none_or(|rt| r.rel_type == rt))
             .cloned()
             .collect();
         Ok(filtered)
@@ -89,37 +97,49 @@ impl GraphRepository for InMemoryAdapter {
         let mut results = Vec::new();
         for start_node in &start_nodes {
             if !pattern.start.properties.is_empty() {
-                let matches = pattern.start.properties.iter().all(|(k, v)| {
-                    start_node.property(k) == Some(v)
-                });
-                if !matches { continue; }
+                let matches = pattern
+                    .start
+                    .properties
+                    .iter()
+                    .all(|(k, v)| start_node.property(k) == Some(v));
+                if !matches {
+                    continue;
+                }
             }
 
-            let start_iri = start_node.property("iri").and_then(|v| v.as_str());
+            let start_iri = start_node
+                .property("iri")
+                .and_then(|v| v.as_str())
+                .or_else(|| start_node.property("id").and_then(|v| v.as_str()))
+                .or_else(|| start_node.property("code").and_then(|v| v.as_str()));
             let Some(start_iri) = start_iri else { continue };
 
             let edges = g.outgoing_edges(start_iri);
 
             for edge in &edges {
-                if let Some(ref rt) = pattern.relationship.rel_type {
-                    if edge.rel_type != *rt { continue; }
+                if let Some(ref rt) = pattern.relationship.rel_type
+                    && edge.rel_type != *rt
+                {
+                    continue;
                 }
 
                 if let Some(end_node) = g.get_node(&edge.end_node_id) {
-                    if let Some(ref end_label) = pattern.end.labels {
-                        if !end_node.has_label(end_label) { continue; }
+                    if let Some(ref end_label) = pattern.end.labels
+                        && !end_node.has_label(end_label)
+                    {
+                        continue;
                     }
                     if !pattern.end.properties.is_empty() {
-                        let matches = pattern.end.properties.iter().all(|(k, v)| {
-                            end_node.property(k) == Some(v)
-                        });
-                        if !matches { continue; }
+                        let matches = pattern
+                            .end
+                            .properties
+                            .iter()
+                            .all(|(k, v)| end_node.property(k) == Some(v));
+                        if !matches {
+                            continue;
+                        }
                     }
-                    results.push((
-                        start_node.clone(),
-                        vec![(*edge).clone()],
-                        end_node.clone(),
-                    ));
+                    results.push((start_node.clone(), vec![(*edge).clone()], end_node.clone()));
                 }
             }
         }

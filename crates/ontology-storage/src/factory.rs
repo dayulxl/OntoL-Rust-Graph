@@ -3,9 +3,9 @@
 //! 业务层只需调用 `StorageConfig::build()` 即可获得
 //! `Arc<dyn GraphRepository>`，不感知后端类型。
 
-use std::sync::Arc;
 use crate::error::StoreError;
 use crate::repository::graph_store::SharedRepository;
+use std::sync::Arc;
 
 /// 存储后端配置
 #[derive(Debug, Clone)]
@@ -28,10 +28,13 @@ impl StorageConfig {
     pub fn build(self) -> Result<SharedRepository, StoreError> {
         match self {
             #[cfg(feature = "memgraph")]
-            StorageConfig::Memgraph { uri, user, password } => {
-                let adapter = crate::adapters::memgraph::MemgraphAdapter::connect(
-                    &uri, &user, &password,
-                )?;
+            StorageConfig::Memgraph {
+                uri,
+                user,
+                password,
+            } => {
+                let adapter =
+                    crate::adapters::memgraph::MemgraphAdapter::connect(&uri, &user, &password)?;
                 Ok(Arc::new(adapter))
             }
 

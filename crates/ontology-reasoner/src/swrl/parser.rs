@@ -102,10 +102,7 @@ impl SwrlParser {
 
         // 按 -> 分割前提和结论
         let arrow_pos = inner.find("->").ok_or_else(|| {
-            ReasonerError::SwrlParse(format!(
-                "Missing '->' separator in rule: '{}'",
-                inner
-            ))
+            ReasonerError::SwrlParse(format!("Missing '->' separator in rule: '{}'", inner))
         })?;
 
         let before_arrow = &inner[..arrow_pos].trim();
@@ -116,7 +113,14 @@ impl SwrlParser {
             Some(colon_pos) => {
                 let n = before_arrow[..colon_pos].trim();
                 let body = before_arrow[colon_pos + 1..].trim();
-                (if n.is_empty() { None } else { Some(n.to_string()) }, body)
+                (
+                    if n.is_empty() {
+                        None
+                    } else {
+                        Some(n.to_string())
+                    },
+                    body,
+                )
             }
             None => (None, *before_arrow),
         };
@@ -256,9 +260,9 @@ impl SwrlParser {
         }
 
         // ClassAtom: iri(var) 或 PropertyAtom: iri(var, var)
-        let paren_pos = text.find('(').ok_or_else(|| {
-            ReasonerError::SwrlParse(format!("Expected '(' in atom: '{}'", text))
-        })?;
+        let paren_pos = text
+            .find('(')
+            .ok_or_else(|| ReasonerError::SwrlParse(format!("Expected '(' in atom: '{}'", text)))?;
 
         let iri = &text[..paren_pos];
         let expanded_iri = self.expand_iri(iri);
@@ -305,12 +309,12 @@ impl SwrlParser {
 
     /// 解析括号内参数列表 "(arg1, arg2, ...)"
     fn parse_args(&self, text: &str, _fn_name: &str) -> Result<Vec<String>, ReasonerError> {
-        let open_paren = text.find('(').ok_or_else(|| {
-            ReasonerError::SwrlParse(format!("Missing '(' in: {}", text))
-        })?;
-        let close_paren = text.rfind(')').ok_or_else(|| {
-            ReasonerError::SwrlParse(format!("Missing ')' in: {}", text))
-        })?;
+        let open_paren = text
+            .find('(')
+            .ok_or_else(|| ReasonerError::SwrlParse(format!("Missing '(' in: {}", text)))?;
+        let close_paren = text
+            .rfind(')')
+            .ok_or_else(|| ReasonerError::SwrlParse(format!("Missing ')' in: {}", text)))?;
 
         let inner = &text[open_paren + 1..close_paren];
         if inner.trim().is_empty() {
@@ -344,8 +348,8 @@ impl SwrlParser {
         }
 
         // 默认前缀展开（如 `:Person` → `http://example.org#Person`）
-        if iri.starts_with(':') {
-            return format!("{}{}", self.default_prefix, &iri[1..]);
+        if let Some(stripped) = iri.strip_prefix(':') {
+            return format!("{}{}", self.default_prefix, stripped);
         }
 
         // 无法展开，原样返回
@@ -363,9 +367,7 @@ fn split_atoms(body: &str) -> Vec<String> {
         match ch {
             '(' => depth += 1,
             ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
             }
             '^' if depth == 0 => {
                 atoms.push(body[start..i].trim().to_string());
@@ -391,9 +393,7 @@ mod tests {
     #[test]
     fn test_parse_simple_class_atom() {
         let parser = SwrlParser::new();
-        let rule = parser.parse(
-            "[test: :Person(?x) -> :Animal(?x)]"
-        ).unwrap();
+        let rule = parser.parse("[test: :Person(?x) -> :Animal(?x)]").unwrap();
 
         assert_eq!(rule.name.as_deref().unwrap(), "test");
         assert_eq!(rule.antecedent.len(), 1);
@@ -404,9 +404,9 @@ mod tests {
     #[test]
     fn test_parse_property_chain() {
         let parser = SwrlParser::new();
-        let rule = parser.parse(
-            "[parentChild: hasParent(?x, ?y) ^ hasBrother(?y, ?z) -> hasUncle(?x, ?z)]"
-        ).unwrap();
+        let rule = parser
+            .parse("[parentChild: hasParent(?x, ?y) ^ hasBrother(?y, ?z) -> hasUncle(?x, ?z)]")
+            .unwrap();
 
         assert_eq!(rule.name.as_deref().unwrap(), "parentChild");
         assert_eq!(rule.antecedent.len(), 2);
@@ -429,7 +429,7 @@ mod tests {
     fn test_unsafe_rule_rejected() {
         let parser = SwrlParser::new();
         let result = parser.parse(
-            "[bad: :Person(?x) -> hasFriend(?x, ?y)]"  // ?y not in antecedent
+            "[bad: :Person(?x) -> hasFriend(?x, ?y)]", // ?y not in antecedent
         );
         assert!(result.is_err());
     }
@@ -444,9 +444,9 @@ mod tests {
     #[test]
     fn test_parse_same_as_different_from() {
         let parser = SwrlParser::new();
-        let rule = parser.parse(
-            "[eq: :Person(?x) ^ :Person(?y) ^ sameAs(?x, ?y) -> :EquivalentPerson(?x)]"
-        ).unwrap();
+        let rule = parser
+            .parse("[eq: :Person(?x) ^ :Person(?y) ^ sameAs(?x, ?y) -> :EquivalentPerson(?x)]")
+            .unwrap();
         assert_eq!(rule.antecedent.len(), 3);
         assert!(rule.is_safe());
     }
@@ -455,9 +455,7 @@ mod tests {
     fn test_prefix_expansion() {
         let mut parser = SwrlParser::new();
         parser.register_prefix("ex", "http://example.org#");
-        let rule = parser.parse(
-            "[t: ex:Person(?x) -> ex:Animal(?x)]"
-        ).unwrap();
+        let rule = parser.parse("[t: ex:Person(?x) -> ex:Animal(?x)]").unwrap();
 
         match &rule.antecedent[0] {
             Atom::ClassAtom { class_iri, .. } => {

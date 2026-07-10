@@ -70,17 +70,9 @@ impl Default for ConfidenceWeights {
 ///
 /// 加权求和后归一化，返回 [0, 1] 区间的置信度值。
 /// 权重可在构造时自定义。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfidenceCalculator {
     weights: ConfidenceWeights,
-}
-
-impl Default for ConfidenceCalculator {
-    fn default() -> Self {
-        Self {
-            weights: ConfidenceWeights::default(),
-        }
-    }
 }
 
 impl ConfidenceCalculator {

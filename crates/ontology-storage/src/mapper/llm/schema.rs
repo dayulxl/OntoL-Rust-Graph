@@ -15,7 +15,10 @@ use crate::mapper::model_mapper::{Class, DataProperty, Individual, ObjectPropert
 impl From<&Class> for JsonSchema {
     fn from(class: &Class) -> Self {
         let mut schema = JsonSchema::new()
-            .with_required("iri", PropertySchema::scalar("string", "类的唯一 IRI 标识符"))
+            .with_required(
+                "iri",
+                PropertySchema::scalar("string", "类的唯一 IRI 标识符"),
+            )
             .with_optional(
                 "label",
                 PropertySchema::scalar("string", "人类可读的类标签"),
@@ -75,8 +78,14 @@ impl From<&ObjectProperty> for JsonSchema {
 impl From<&DataProperty> for JsonSchema {
     fn from(prop: &DataProperty) -> Self {
         JsonSchema::new()
-            .with_required("iri", PropertySchema::scalar("string", "数据属性的唯一 IRI"))
-            .with_optional("label", PropertySchema::scalar("string", "数据属性的显示标签"))
+            .with_required(
+                "iri",
+                PropertySchema::scalar("string", "数据属性的唯一 IRI"),
+            )
+            .with_optional(
+                "label",
+                PropertySchema::scalar("string", "数据属性的显示标签"),
+            )
             .with_optional("domain", PropertySchema::scalar("string", "定义域类 IRI"))
             .with_optional(
                 "range_xsd_type",
@@ -170,10 +179,7 @@ pub fn ontology_query_tools() -> Vec<ToolDefinition> {
             "query_relationships",
             "查询指定节点的出方向关系。可以按关系类型过滤。",
             JsonSchema::new()
-                .with_required(
-                    "node_iri",
-                    PropertySchema::scalar("string", "源节点的 IRI"),
-                )
+                .with_required("node_iri", PropertySchema::scalar("string", "源节点的 IRI"))
                 .with_optional(
                     "rel_type",
                     PropertySchema::enumerated(

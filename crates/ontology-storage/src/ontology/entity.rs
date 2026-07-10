@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use crate::mapper::graph::node::Node;
 use crate::mapper::graph::property::PropertyValue;
 use crate::mapper::graph::relationship::Relationship;
+use crate::mapper::unified_mapping;
 use crate::repository::graph_store::GraphRepository;
 
 // ═══════════════════════════════════════════════════════════
@@ -54,19 +55,31 @@ pub fn get_f64(params: &serde_json::Value, key: &str) -> Option<f64> {
     params.get(key).and_then(|v| v.as_f64())
 }
 
-pub fn set_opt_str(props: &mut HashMap<String, PropertyValue>, params: &serde_json::Value, key: &str) {
+pub fn set_opt_str(
+    props: &mut HashMap<String, PropertyValue>,
+    params: &serde_json::Value,
+    key: &str,
+) {
     if let Some(v) = get_str(params, key) {
         props.insert(key.to_string(), PropertyValue::from(v));
     }
 }
 
-pub fn set_opt_i64(props: &mut HashMap<String, PropertyValue>, params: &serde_json::Value, key: &str) {
+pub fn set_opt_i64(
+    props: &mut HashMap<String, PropertyValue>,
+    params: &serde_json::Value,
+    key: &str,
+) {
     if let Some(v) = get_i64(params, key) {
         props.insert(key.to_string(), PropertyValue::Integer(v));
     }
 }
 
-pub fn set_opt_f64(props: &mut HashMap<String, PropertyValue>, params: &serde_json::Value, key: &str) {
+pub fn set_opt_f64(
+    props: &mut HashMap<String, PropertyValue>,
+    params: &serde_json::Value,
+    key: &str,
+) {
     if let Some(v) = get_f64(params, key) {
         props.insert(key.to_string(), PropertyValue::Float(v));
     }
@@ -77,14 +90,14 @@ pub fn set_opt_f64(props: &mut HashMap<String, PropertyValue>, params: &serde_js
 // ═══════════════════════════════════════════════════════════
 
 fn code_exists(repo: &dyn GraphRepository, code: &str) -> bool {
-    repo.get_nodes_by_label("Entity")
+    repo.get_nodes_by_label(unified_mapping::ENTITY_LABEL)
         .unwrap_or_default()
         .iter()
         .any(|n| n.property("code").and_then(|v| v.as_str()) == Some(code))
 }
 
 fn type_name_exists(repo: &dyn GraphRepository, name: &str) -> bool {
-    repo.get_nodes_by_label("Type")
+    repo.get_nodes_by_label(unified_mapping::TYPE_LABEL)
         .unwrap_or_default()
         .iter()
         .any(|n| n.property("name").and_then(|v| v.as_str()) == Some(name))
@@ -96,7 +109,9 @@ fn type_name_exists(repo: &dyn GraphRepository, name: &str) -> bool {
 
 /// 从 JSON 参数构建 Entity 节点属性表（不做 I/O）。
 /// 覆盖架构定义的 30 个标准字段 + 额外自定义属性。
-pub fn build_entity_properties(params: &serde_json::Value) -> Result<HashMap<String, PropertyValue>, String> {
+pub fn build_entity_properties(
+    params: &serde_json::Value,
+) -> Result<HashMap<String, PropertyValue>, String> {
     let code = get_str(params, "code").ok_or("'code' is required")?;
 
     let mut props = HashMap::new();
@@ -125,13 +140,13 @@ pub fn build_entity_properties(params: &serde_json::Value) -> Result<HashMap<Str
     set_opt_str(&mut props, params, "owner");
     set_opt_str(&mut props, params, "parent_id");
 
-    // 行为字段
-    set_opt_str(&mut props, params, "precondition");
-    set_opt_str(&mut props, params, "effect");
-    set_opt_str(&mut props, params, "cost");
-    set_opt_i64(&mut props, params, "duration");
-    set_opt_i64(&mut props, params, "priority");
-    set_opt_str(&mut props, params, "composedOf");
+    // 行为字段 (OWL2 风格属性名，全部 String 类型)
+    set_opt_str(&mut props, params, unified_mapping::HAS_PRECONDITION_KEY);
+    set_opt_str(&mut props, params, unified_mapping::HAS_EFFECT_KEY);
+    set_opt_str(&mut props, params, unified_mapping::HAS_COST_KEY);
+    set_opt_str(&mut props, params, unified_mapping::HAS_DURATION_KEY);
+    set_opt_str(&mut props, params, unified_mapping::HAS_PRIORITY_KEY);
+    set_opt_str(&mut props, params, unified_mapping::COMPOSED_OF_KEY);
 
     // 空间字段
     if let Some(arr) = params.get("Space_abs").and_then(|v| v.as_array()) {
@@ -144,14 +159,40 @@ pub fn build_entity_properties(params: &serde_json::Value) -> Result<HashMap<Str
 
     // 额外自定义属性
     let known_keys: std::collections::HashSet<&str> = [
-        "code", "id", "unit_id", "graph_id", "domain", "leven",
-        "name", "type", "update_time", "create_time", "confidence",
-        "static_rule_id", "dynamic_rule_id", "speed", "power",
-        "description", "status", "version", "cope_version",
-        "source", "owner", "parent_id",
-        "precondition", "effect", "cost", "duration", "priority",
-        "composedOf", "Space_abs", "command_side",
-    ].iter().copied().collect();
+        "code",
+        "id",
+        "unit_id",
+        "graph_id",
+        "domain",
+        "leven",
+        "name",
+        "type",
+        "update_time",
+        "create_time",
+        "confidence",
+        "static_rule_id",
+        "dynamic_rule_id",
+        "speed",
+        "power",
+        "description",
+        "status",
+        "version",
+        "cope_version",
+        "source",
+        "owner",
+        "parent_id",
+        "hasPrecondition",
+        "hasEffect",
+        "hasCost",
+        "hasDuration",
+        "hasPriority",
+        "composedOf",
+        "Space_abs",
+        "command_side",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     if let Some(obj) = params.as_object() {
         for (k, v) in obj {
@@ -167,6 +208,7 @@ pub fn build_entity_properties(params: &serde_json::Value) -> Result<HashMap<Str
 /// 创建 Entity 节点。
 ///
 /// 执行 code 唯一性校验 → 构建属性 → 写入存储。
+/// 如未提供 `id`，自动生成唯一技术标识符。
 pub fn create_entity(
     repo: &dyn GraphRepository,
     params: &serde_json::Value,
@@ -177,15 +219,38 @@ pub fn create_entity(
         return Err(format!("Entity with code '{}' already exists", code));
     }
 
-    let props = build_entity_properties(params)?;
-    let node = Node::new(vec!["Entity".to_string()], props);
-    let node_id = repo.insert_node(&node).map_err(|e| format!("Insert failed: {}", e))?;
+    // 确保 id 存在（未提供时自动生成）
+    let mut params = params.clone();
+    if get_str(&params, "id").is_none()
+        && let Some(obj) = params.as_object_mut()
+    {
+        obj.insert(
+            "id".to_string(),
+            serde_json::Value::String(generate_entity_id(code)),
+        );
+    }
+
+    let props = build_entity_properties(&params)?;
+    let node = Node::new(vec![unified_mapping::ENTITY_LABEL.to_string()], props);
+    let node_id = repo
+        .insert_node(&node)
+        .map_err(|e| format!("Insert failed: {}", e))?;
 
     Ok(serde_json::json!({
         "action": "create_entity",
         "code": code,
         "node_id": node_id,
     }))
+}
+
+/// 为实体生成唯一技术标识符。
+fn generate_entity_id(code: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("urn:entity:{}-{}", code, ts)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -214,19 +279,22 @@ pub fn create_type(
     set_opt_i64(&mut props, params, "leven");
     set_opt_str(&mut props, params, "code");
 
-    let type_node = Node::new(vec!["Type".to_string()], props);
-    let type_id = repo.insert_node(&type_node).map_err(|e| format!("Insert failed: {}", e))?;
+    let type_node = Node::new(vec![unified_mapping::TYPE_LABEL.to_string()], props);
+    let type_id = repo
+        .insert_node(&type_node)
+        .map_err(|e| format!("Insert failed: {}", e))?;
 
     // subClassOf
     let mut parent_info: Option<serde_json::Value> = None;
     if let Some(parent_name) = get_str(params, "parent_type") {
         if type_name_exists(repo, parent_name) {
             let rel = Relationship::simple(
-                &format!("type_{}", name),
-                "subClassOf",
-                &format!("type_{}", parent_name),
+                format!("type_{}", name),
+                unified_mapping::SUB_CLASS_OF_REL,
+                format!("type_{}", parent_name),
             );
-            repo.insert_relationship(&rel).map_err(|e| format!("subClassOf failed: {}", e))?;
+            repo.insert_relationship(&rel)
+                .map_err(|e| format!("subClassOf failed: {}", e))?;
             parent_info = Some(serde_json::json!({"parent_type": parent_name}));
         } else {
             return Err(format!("Parent type '{}' not found", parent_name));
@@ -276,9 +344,20 @@ pub fn create_patrol(
 
     // 额外自定义属性
     let known_keys: std::collections::HashSet<&str> = [
-        "code", "name", "description", "status", "domain",
-        "command_side", "duration", "confidence", "path", "entities",
-    ].iter().copied().collect();
+        "code",
+        "name",
+        "description",
+        "status",
+        "domain",
+        "command_side",
+        "duration",
+        "confidence",
+        "path",
+        "entities",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     if let Some(obj) = params.as_object() {
         for (k, v) in obj {
@@ -288,8 +367,10 @@ pub fn create_patrol(
         }
     }
 
-    let node = Node::new(vec!["Patrol".to_string()], props);
-    let node_id = repo.insert_node(&node).map_err(|e| format!("Insert failed: {}", e))?;
+    let node = Node::new(vec![unified_mapping::PATROL_LABEL.to_string()], props);
+    let node_id = repo
+        .insert_node(&node)
+        .map_err(|e| format!("Insert failed: {}", e))?;
 
     Ok(serde_json::json!({
         "action": "create_patrol",
@@ -348,7 +429,10 @@ mod tests {
 
     #[test]
     fn json_to_property_null() {
-        assert_eq!(json_to_property(&serde_json::Value::Null), PropertyValue::Null);
+        assert_eq!(
+            json_to_property(&serde_json::Value::Null),
+            PropertyValue::Null
+        );
     }
 
     #[test]

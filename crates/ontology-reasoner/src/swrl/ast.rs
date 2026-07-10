@@ -103,7 +103,9 @@ impl Atom {
     pub fn variables(&self) -> Vec<&str> {
         match self {
             Atom::ClassAtom { variable, .. } => vec![variable.as_str()],
-            Atom::ObjectPropertyAtom { subject, object, .. } => {
+            Atom::ObjectPropertyAtom {
+                subject, object, ..
+            } => {
                 vec![subject.as_str(), object.as_str()]
             }
             Atom::DataPropertyAtom { subject, value, .. } => {
@@ -116,10 +118,14 @@ impl Atom {
             Atom::SameAs(a, b) | Atom::DifferentFrom(a, b) => {
                 vec![a.as_str(), b.as_str()]
             }
-            Atom::Builtin { arguments, .. } => {
-                arguments.iter().filter(|a| a.starts_with('?')).map(|a| a.as_str()).collect()
-            }
-            Atom::Query { result_variable, .. } => {
+            Atom::Builtin { arguments, .. } => arguments
+                .iter()
+                .filter(|a| a.starts_with('?'))
+                .map(|a| a.as_str())
+                .collect(),
+            Atom::Query {
+                result_variable, ..
+            } => {
                 vec![result_variable.as_str()]
             }
         }
@@ -192,11 +198,7 @@ impl Rule {
 
     /// 返回前提中所有不同的变量名
     pub fn antecedent_variables(&self) -> Vec<&str> {
-        let mut vars: Vec<&str> = self
-            .antecedent
-            .iter()
-            .flat_map(|a| a.variables())
-            .collect();
+        let mut vars: Vec<&str> = self.antecedent.iter().flat_map(|a| a.variables()).collect();
         vars.sort();
         vars.dedup();
         vars
@@ -204,11 +206,7 @@ impl Rule {
 
     /// 返回结论中的所有变量名
     pub fn consequent_variables(&self) -> Vec<&str> {
-        let mut vars: Vec<&str> = self
-            .consequent
-            .iter()
-            .flat_map(|a| a.variables())
-            .collect();
+        let mut vars: Vec<&str> = self.consequent.iter().flat_map(|a| a.variables()).collect();
         vars.sort();
         vars.dedup();
         vars

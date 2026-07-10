@@ -1,7 +1,8 @@
 //! GET /health — 健康检查。
 
-use std::sync::{Arc, Mutex};
 use crate::app::AppState;
+use ontology_storage::mapper::unified_mapping;
+use std::sync::{Arc, Mutex};
 
 pub fn handle(state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let app = match state.lock() {
@@ -9,8 +10,16 @@ pub fn handle(state: &Arc<Mutex<AppState>>) -> (u16, String) {
         Err(e) => return (500, json_err("Lock error", &e.to_string())),
     };
 
-    let entity_count = app.repo.get_nodes_by_label("Entity").map(|v| v.len()).unwrap_or(0);
-    let type_count   = app.repo.get_nodes_by_label("Type").map(|v| v.len()).unwrap_or(0);
+    let entity_count = app
+        .repo
+        .get_nodes_by_label(unified_mapping::ENTITY_LABEL)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let type_count = app
+        .repo
+        .get_nodes_by_label(unified_mapping::TYPE_LABEL)
+        .map(|v| v.len())
+        .unwrap_or(0);
 
     let body = serde_json::json!({
         "status": "ok",

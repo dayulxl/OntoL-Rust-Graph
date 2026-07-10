@@ -91,7 +91,9 @@ impl MemgraphAdapter {
                     .execute(neo4rs::query("RETURN 1 AS ok"))
                     .await
                     .map_err(|e| StoreError::Connection(format!("Memgraph test: {}", e)))?;
-                result.next().await
+                result
+                    .next()
+                    .await
                     .map_err(|e| StoreError::Connection(format!("Memgraph test: {}", e)))?;
                 Ok::<_, StoreError>(())
             }
@@ -106,7 +108,9 @@ impl MemgraphAdapter {
         let c = cypher.to_string();
         let col = col.to_string();
         self.runtime.block_on(async move {
-            let mut stream = g.execute(neo4rs::query(&c)).await
+            let mut stream = g
+                .execute(neo4rs::query(&c))
+                .await
                 .map_err(|e| StoreError::Query(format!("Memgraph: {}", e)))?;
             let mut nodes = Vec::new();
             while let Ok(Some(row)) = stream.next().await {
@@ -125,16 +129,19 @@ impl MemgraphAdapter {
 
 impl GraphRepository for MemgraphAdapter {
     fn begin_transaction(&self) -> Result<Box<dyn Transaction>, StoreError> {
-        Err(StoreError::Transaction("Memgraph: not yet supported".into()))
+        Err(StoreError::Transaction(
+            "Memgraph: not yet supported".into(),
+        ))
     }
 
     fn get_node(&self, id: &str) -> Result<Option<Node>, StoreError> {
         let g = self.graph.clone();
         self.runtime.block_on(async move {
-            let q = neo4rs::query(
-                "MATCH (n) WHERE n.id = $id OR n.code = $id RETURN n LIMIT 1"
-            ).param("id", id);
-            let mut stream = g.execute(q).await
+            let q = neo4rs::query("MATCH (n) WHERE n.id = $id OR n.code = $id RETURN n LIMIT 1")
+                .param("id", id);
+            let mut stream = g
+                .execute(q)
+                .await
                 .map_err(|e| StoreError::Query(format!("Memgraph: {}", e)))?;
             while let Ok(Some(row)) = stream.next().await {
                 if let Ok(n) = row.get::<neo4rs::Node>("n") {
@@ -151,21 +158,27 @@ impl GraphRepository for MemgraphAdapter {
     }
 
     fn get_relationships(
-        &self, node_code: &str, rel_type: Option<&str>,
+        &self,
+        node_code: &str,
+        rel_type: Option<&str>,
     ) -> Result<Vec<Relationship>, StoreError> {
         let g = self.graph.clone();
         let c = node_code.to_string();
         let cypher = match rel_type {
             Some(ref rt) => format!(
                 "MATCH (n) WHERE n.id = $node_id OR n.code = $node_id \
-                 MATCH (n)-[r:{}]->(m) RETURN r, m.id AS target", rt
+                 MATCH (n)-[r:{}]->(m) RETURN r, m.id AS target",
+                rt
             ),
             None => "MATCH (n) WHERE n.id = $node_id OR n.code = $node_id \
-                     MATCH (n)-[r]->(m) RETURN r, m.id AS target".to_string(),
+                     MATCH (n)-[r]->(m) RETURN r, m.id AS target"
+                .to_string(),
         };
         self.runtime.block_on(async move {
             let q = neo4rs::query(&cypher).param("node_id", c);
-            let mut stream = g.execute(q).await
+            let mut stream = g
+                .execute(q)
+                .await
                 .map_err(|e| StoreError::Query(format!("Memgraph: {}", e)))?;
             let mut rels = Vec::new();
             while let Ok(Some(row)) = stream.next().await {
@@ -182,12 +195,15 @@ impl GraphRepository for MemgraphAdapter {
     }
 
     fn query_pattern(
-        &self, pattern: &GraphPattern,
+        &self,
+        pattern: &GraphPattern,
     ) -> Result<Vec<(Node, Vec<Relationship>, Node)>, StoreError> {
         let g = self.graph.clone();
         let cypher = build_match_clause(pattern);
         self.runtime.block_on(async move {
-            let mut stream = g.execute(neo4rs::query(&cypher)).await
+            let mut stream = g
+                .execute(neo4rs::query(&cypher))
+                .await
                 .map_err(|e| StoreError::Query(format!("Memgraph pattern: {}", e)))?;
             let mut results = Vec::new();
             while let Ok(Some(row)) = stream.next().await {
@@ -195,11 +211,7 @@ impl GraphRepository for MemgraphAdapter {
                 let e = row.get::<neo4rs::Node>("e");
                 let r = row.get::<neo4rs::Relation>("r");
                 if let (Ok(sn), Ok(en), Ok(rn)) = (s, e, r) {
-                    results.push((
-                        row_to_node(sn),
-                        vec![row_to_rel(rn)],
-                        row_to_node(en),
-                    ));
+                    results.push((row_to_node(sn), vec![row_to_rel(rn)], row_to_node(en)));
                 }
             }
             Ok(results)
@@ -222,25 +234,31 @@ impl GraphRepository for MemgraphAdapter {
         } else {
             format!(" {{ {} }}", set_parts.join(", "))
         };
-        let cypher = format!("CREATE (n{}{}) RETURN COALESCE(n.id, n.code) AS node_id", labels_str, props);
+        let cypher = format!(
+            "CREATE (n{}{}) RETURN COALESCE(n.id, n.code) AS node_id",
+            labels_str, props
+        );
         let properties = node.properties.clone();
         self.runtime.block_on(async move {
             let mut q = neo4rs::query(&cypher);
             for (k, v) in &properties {
                 q = bind_prop(q, k, v);
             }
-            let mut stream = g.execute(q).await
+            let mut stream = g
+                .execute(q)
+                .await
                 .map_err(|e| StoreError::Query(format!("Memgraph insert: {}", e)))?;
             while let Ok(Some(row)) = stream.next().await {
-                if let Ok(node_id) = row.get::<String>("node_id") {
-                    if !node_id.is_empty() {
-                        return Ok(node_id);
-                    }
+                if let Ok(node_id) = row.get::<String>("node_id")
+                    && !node_id.is_empty()
+                {
+                    return Ok(node_id);
                 }
             }
             node.property("id")
                 .or_else(|| node.property("code"))
-                .and_then(|v| v.as_str()).map(String::from)
+                .and_then(|v| v.as_str())
+                .map(String::from)
                 .ok_or_else(|| StoreError::Query("insert_node: no id or code".into()))
         })
     }
@@ -250,7 +268,9 @@ impl GraphRepository for MemgraphAdapter {
         let props_set = if rel.properties.is_empty() {
             String::new()
         } else {
-            let parts: Vec<String> = rel.properties.keys()
+            let parts: Vec<String> = rel
+                .properties
+                .keys()
                 .map(|k| format!("{}: ${}", k, k))
                 .collect();
             format!(" SET r = {{ {} }}", parts.join(", "))
@@ -271,7 +291,9 @@ impl GraphRepository for MemgraphAdapter {
             for (k, v) in &rprops {
                 q = bind_prop(q, k, v);
             }
-            g.run(q).await.map_err(|e| StoreError::Query(format!("Memgraph insert rel: {}", e)))
+            g.run(q)
+                .await
+                .map_err(|e| StoreError::Query(format!("Memgraph insert rel: {}", e)))
         })
     }
 
@@ -320,7 +342,9 @@ fn row_to_node(node: neo4rs::Node) -> Node {
     let labels: Vec<String> = node.labels().iter().map(|l| l.to_string()).collect();
     let mut properties = HashMap::new();
     for key in node.keys() {
-        let val = node.get::<String>(key).map(PropertyValue::String)
+        let val = node
+            .get::<String>(key)
+            .map(PropertyValue::String)
             .or_else(|_| node.get::<i64>(key).map(PropertyValue::Integer))
             .or_else(|_| node.get::<f64>(key).map(PropertyValue::Float))
             .or_else(|_| node.get::<bool>(key).map(PropertyValue::Boolean))
@@ -333,7 +357,9 @@ fn row_to_node(node: neo4rs::Node) -> Node {
 fn row_to_rel(rel: neo4rs::Relation) -> Relationship {
     let mut properties = HashMap::new();
     for key in rel.keys() {
-        let val = rel.get::<String>(key).map(PropertyValue::String)
+        let val = rel
+            .get::<String>(key)
+            .map(PropertyValue::String)
             .or_else(|_| rel.get::<i64>(key).map(PropertyValue::Integer))
             .or_else(|_| rel.get::<f64>(key).map(PropertyValue::Float))
             .or_else(|_| rel.get::<bool>(key).map(PropertyValue::Boolean))
@@ -371,16 +397,25 @@ fn build_match_clause(pattern: &GraphPattern) -> String {
     let start = build_node(&pattern.start, "s");
     let rel = build_rel(&pattern.relationship, "r");
     let end = build_node(&pattern.end, "e");
-    format!("MATCH {}{}{} RETURN s AS s, r AS r, e AS e LIMIT 1000", start, rel, end)
+    format!(
+        "MATCH {}{}{} RETURN s AS s, r AS r, e AS e LIMIT 1000",
+        start, rel, end
+    )
 }
 
 fn build_node(np: &NodePattern, var: &str) -> String {
     let label = np.labels.as_deref().unwrap_or("");
-    let label_str = if label.is_empty() { String::new() } else { format!(":{}", label) };
+    let label_str = if label.is_empty() {
+        String::new()
+    } else {
+        format!(":{}", label)
+    };
     if np.properties.is_empty() {
         format!("({}{})", var, label_str)
     } else {
-        let parts: Vec<String> = np.properties.iter()
+        let parts: Vec<String> = np
+            .properties
+            .iter()
             .map(|(k, v)| format!("{}: {}", k, prop_literal(v)))
             .collect();
         format!("({}{} {{ {} }})", var, label_str, parts.join(", "))
@@ -389,12 +424,18 @@ fn build_node(np: &NodePattern, var: &str) -> String {
 
 fn build_rel(rp: &RelationshipPattern, var: &str) -> String {
     let rt = rp.rel_type.as_deref().unwrap_or("");
-    let type_str = if rt.is_empty() { String::new() } else { format!(":{}", rt) };
+    let type_str = if rt.is_empty() {
+        String::new()
+    } else {
+        format!(":{}", rt)
+    };
     let dir = if rp.outgoing { "->" } else { "<-" };
     if rp.properties.is_empty() {
         format!("-[{}{}]{}-", var, type_str, dir)
     } else {
-        let parts: Vec<String> = rp.properties.iter()
+        let parts: Vec<String> = rp
+            .properties
+            .iter()
             .map(|(k, v)| format!("{}: {}", k, prop_literal(v)))
             .collect();
         format!("-[{}{} {{ {} }}]{}-", var, type_str, parts.join(", "), dir)

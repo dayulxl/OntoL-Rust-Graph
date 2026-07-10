@@ -1,8 +1,9 @@
 //! GET /schema — ASW 知识图谱数据模型 JSON Schema。
 
-use std::sync::{Arc, Mutex};
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
+use ontology_storage::mapper::unified_mapping;
+use std::sync::{Arc, Mutex};
 
 pub fn handle(state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let app = match state.lock() {
@@ -10,8 +11,16 @@ pub fn handle(state: &Arc<Mutex<AppState>>) -> (u16, String) {
         Err(e) => return (500, json_error(format!("Lock error: {}", e))),
     };
 
-    let entity_count = app.repo.get_nodes_by_label("Entity").map(|v| v.len()).unwrap_or(0);
-    let type_count   = app.repo.get_nodes_by_label("Type").map(|v| v.len()).unwrap_or(0);
+    let entity_count = app
+        .repo
+        .get_nodes_by_label(unified_mapping::ENTITY_LABEL)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let type_count = app
+        .repo
+        .get_nodes_by_label(unified_mapping::TYPE_LABEL)
+        .map(|v| v.len())
+        .unwrap_or(0);
 
     let schema = serde_json::json!({
         "domain": "Anti-SubmarineWarfare",
@@ -57,7 +66,7 @@ pub fn handle(state: &Arc<Mutex<AppState>>) -> (u16, String) {
         "relationships": {
             "subClassOf": {
                 "direction": "(Type)-[:subClassOf]->(Type)",
-                "description": "分类层级：子类→父类"
+                "description": "分类层级：子类→父类 (rdfs:subClassOf)"
             },
             "移动": {
                 "direction": "(Entity)-[:移动]->(Entity)",

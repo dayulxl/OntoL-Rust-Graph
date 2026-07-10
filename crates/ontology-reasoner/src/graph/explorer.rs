@@ -31,15 +31,19 @@ pub enum Direction {
     Both,
 }
 
-impl Direction {
-    pub fn from_str(s: &str) -> Self {
+impl std::str::FromStr for Direction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "incoming" => Self::Incoming,
-            "both" => Self::Both,
-            _ => Self::Outgoing,
+            "incoming" => Ok(Self::Incoming),
+            "both" => Ok(Self::Both),
+            _ => Ok(Self::Outgoing),
         }
     }
+}
 
+impl Direction {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Outgoing => "outgoing",
@@ -145,16 +149,21 @@ impl GraphExplorer {
     /// 3. BFS 遍历 — 按配置的深度和方向沿指定关系逐跳遍历
     /// 4. 逐跳分析 — 对每跳获取目标节点、类型层次、SWRL 规则匹配、下一步预测
     pub fn explore(&self, config: &ExploreConfig) -> Result<ExploreResult, String> {
-        let max_depth = config.max_depth.min(5).max(1);
+        let max_depth = config.max_depth.clamp(1, 5);
 
         // ── 1. 实体解析 ──
         let source_orig = util::find_entity_by_id_code(
             self.repo.as_ref(),
             &config.start_id,
             config.start_code.as_deref(),
-        ).ok_or_else(|| {
+        )
+        .ok_or_else(|| {
             let desc = if !config.start_id.is_empty() && config.start_code.is_some() {
-                format!("id='{}' + code='{}'", config.start_id, config.start_code.as_deref().unwrap())
+                format!(
+                    "id='{}' + code='{}'",
+                    config.start_id,
+                    config.start_code.as_deref().unwrap()
+                )
             } else if !config.start_id.is_empty() {
                 format!("id='{}'", config.start_id)
             } else {
@@ -177,14 +186,17 @@ impl GraphExplorer {
             source_eff = new_source;
         } else {
             _code_map = Default::default();
-            source_eff = source_orig.property("code")
+            source_eff = source_orig
+                .property("code")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&config.start_id)
                 .to_string();
         };
 
         // 用克隆后的副本为源实体
-        let source = self.repo.get_node(&source_eff)
+        let source = self
+            .repo
+            .get_node(&source_eff)
             .ok()
             .flatten()
             .unwrap_or(source_orig);
@@ -202,11 +214,8 @@ impl GraphExplorer {
                 .get_relationships(&source_id, None)
                 .unwrap_or_default(),
         );
-        let source_incoming_rel = util::find_incoming_relationships(
-            self.repo.as_ref(),
-            &source_id,
-            None,
-        );
+        let source_incoming_rel =
+            util::find_incoming_relationships(self.repo.as_ref(), &source_id, None);
         let source_incoming = util::summarize_relations(&source_incoming_rel);
 
         let rel_filter = if config.relation.is_empty() {
@@ -246,11 +255,9 @@ impl GraphExplorer {
                 }
             }
             if matches!(config.direction, Direction::Incoming | Direction::Both) {
-                for r in util::find_incoming_relationships(
-                    self.repo.as_ref(),
-                    &current_id,
-                    rel_filter,
-                ) {
+                for r in
+                    util::find_incoming_relationships(self.repo.as_ref(), &current_id, rel_filter)
+                {
                     relations.push((false, r));
                 }
             }
@@ -270,7 +277,8 @@ impl GraphExplorer {
 
                 // 副本版本守卫：只允许在同一版本内遍历
                 if let Some(ref cv) = config.cope_version {
-                    let target_ver = target_node.as_ref()
+                    let target_ver = target_node
+                        .as_ref()
                         .and_then(|n| n.property("cope_version").and_then(|v| v.as_str()))
                         .unwrap_or("");
                     if target_ver != cv.as_str() {
@@ -301,9 +309,8 @@ impl GraphExplorer {
                     util::predict_next_steps(self.repo.as_ref(), &effective_target_id);
 
                 // ── 置信度检查（读取节点自身 confidence 属性） ──
-                let node_confidence = util::prop_as_f64(
-                    target_node.as_ref().and_then(|n| n.property("confidence"))
-                );
+                let node_confidence =
+                    util::prop_as_f64(target_node.as_ref().and_then(|n| n.property("confidence")));
                 let stop_propagation = match (node_confidence, config.confidence_threshold) {
                     (Some(v), Some(t)) => v < t,
                     _ => false, // 无置信度数据 或 未设阈值 → 不阻断

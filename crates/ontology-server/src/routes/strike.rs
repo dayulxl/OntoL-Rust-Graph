@@ -6,12 +6,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use ontology_reasoner::timeline::{StrikeInput, TimelineEngine};
 use ontology_storage::mapper::graph::node::Node;
 use ontology_storage::mapper::graph::property::PropertyValue;
-use ontology_reasoner::timeline::{TimelineEngine, StrikeInput};
+use ontology_storage::mapper::unified_mapping;
 
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
 
 macro_rules! logf {
     ($file:expr, $($arg:tt)*) => {{
@@ -40,19 +41,29 @@ pub fn handle(
 // GET
 // ═══════════════════════════════════════════════════════════
 
-fn handle_get(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
-    let code = request.url().to_string()
-        .split("code=").nth(1).unwrap_or("").to_string();
+fn handle_get(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
+    let code = request
+        .url()
+        .split("code=")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
 
-    let app = match state.lock() { Ok(a) => a, Err(e) => return (500, json_error(e.to_string())) };
-    let all = app.repo.get_nodes_by_label("Strike").unwrap_or_default();
+    let app = match state.lock() {
+        Ok(a) => a,
+        Err(e) => return (500, json_error(e.to_string())),
+    };
+    let all = app
+        .repo
+        .get_nodes_by_label(unified_mapping::STRIKE_LABEL)
+        .unwrap_or_default();
 
     if code.is_empty() {
         let list: Vec<serde_json::Value> = all.iter().map(node_to_strike).collect();
-        return (200, serde_json::json!({ "count": list.len(), "strikes": list }).to_string());
+        return (
+            200,
+            serde_json::json!({ "count": list.len(), "strikes": list }).to_string(),
+        );
     }
     for n in &all {
         if n.property("code").and_then(|v| v.as_str()) == Some(&code) {
@@ -66,10 +77,7 @@ fn handle_get(
 // POST — 解析 JSON → 调用推理机推演 → 写回图存储
 // ═══════════════════════════════════════════════════════════
 
-fn handle_post(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+fn handle_post(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -79,35 +87,60 @@ fn handle_post(
         Err(e) => return (400, json_error(format!("Invalid JSON: {}", e))),
     };
 
-    let app = match state.lock() { Ok(a) => a, Err(e) => return (500, json_error(e.to_string())) };
+    let app = match state.lock() {
+        Ok(a) => a,
+        Err(e) => return (500, json_error(e.to_string())),
+    };
     let mut results = Vec::new();
     let engine = TimelineEngine::new();
 
     let _ = std::fs::create_dir_all("logs");
-    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let log_path = format!("logs/strike_{}.log", ts);
 
     for strike in &strikes {
         let code = strike.get("code").and_then(|v| v.as_str()).unwrap_or("");
         let name = strike.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let sid  = strike.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let sid = strike.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
         // ── 查找攻击方 ──
-        let attacker_code = strike.get("attacker").and_then(|v| v.as_str()).unwrap_or("");
+        let attacker_code = strike
+            .get("attacker")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let attacker = find_entity(&app, attacker_code);
         let (a_code, a_lat, a_lon, a_alt, a_conf) = match &attacker {
             Some(n) => (
-                n.property("code").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+                n.property("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
                 get_float(n, "Space_abs", 0),
                 get_float(n, "Space_abs", 1),
                 get_float(n, "Space_abs", 3),
                 prop_as_f64(n.property("confidence")).unwrap_or(0.8),
             ),
-            None => (attacker_code.to_string(),
-                strike.get("attacker_lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                strike.get("attacker_lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                strike.get("attacker_alt").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                strike.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.7),
+            None => (
+                attacker_code.to_string(),
+                strike
+                    .get("attacker_lat")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                strike
+                    .get("attacker_lon")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                strike
+                    .get("attacker_alt")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                strike
+                    .get("confidence")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.7),
             ),
         };
 
@@ -116,22 +149,44 @@ fn handle_post(
         let target = find_entity(&app, target_code);
         let (t_code, t_lat, t_lon, t_depth) = match &target {
             Some(n) => (
-                n.property("code").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+                n.property("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
                 get_float(n, "Space_abs", 0),
                 get_float(n, "Space_abs", 1),
                 -get_float(n, "Space_abs", 2), // depth = -z
             ),
-            None => (target_code.to_string(),
-                strike.get("target_lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                strike.get("target_lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                strike.get("target_depth").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            None => (
+                target_code.to_string(),
+                strike
+                    .get("target_lat")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                strike
+                    .get("target_lon")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                strike
+                    .get("target_depth")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
             ),
         };
 
         // ── 武器参数 ──
-        let weapon_type = strike.get("weapon_type").and_then(|v| v.as_str()).unwrap_or("鱼雷");
-        let weapon_range = strike.get("weapon_range_m").and_then(|v| v.as_f64()).unwrap_or(10_000.0);
-        let confidence = strike.get("confidence").and_then(|v| v.as_f64()).unwrap_or(a_conf);
+        let weapon_type = strike
+            .get("weapon_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("鱼雷");
+        let weapon_range = strike
+            .get("weapon_range_m")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(10_000.0);
+        let confidence = strike
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(a_conf);
 
         logf!(&log_path, "🎯 打击任务: {} ({})", name, code);
         logf!(&log_path, "   攻击方: {}  target: {}", a_code, t_code);
@@ -169,27 +224,61 @@ fn handle_post(
 
         // ── 写回打击节点 ──
         let mut props = HashMap::new();
-        props.insert("code".to_string(),         PropertyValue::from(code));
-        props.insert("name".to_string(),         PropertyValue::from(name));
-        props.insert("attacker".to_string(),     PropertyValue::from(a_code.as_str()));
-        props.insert("target".to_string(),       PropertyValue::from(t_code.as_str()));
-        props.insert("weapon_type".to_string(),  PropertyValue::from(weapon_type));
-        props.insert("distance_m".to_string(),   PropertyValue::Float(result.distance_m));
-        props.insert("in_range".to_string(),     PropertyValue::Boolean(result.in_range));
-        props.insert("hit_probability".to_string(), PropertyValue::Float(result.hit_probability));
-        props.insert("damage_level".to_string(), PropertyValue::from(result.damage_level.as_str()));
-        props.insert("total_time_s".to_string(), PropertyValue::Float(result.total_time_s));
-        props.insert("duration".to_string(),     PropertyValue::from(result.duration));
-        props.insert("precondition".to_string(), PropertyValue::from(result.precondition.as_str()));
-        props.insert("effect".to_string(),       PropertyValue::from(result.effect.as_str()));
-        props.insert("cost".to_string(),         PropertyValue::from(result.cost.as_str()));
-        props.insert("composedOf".to_string(),   PropertyValue::from(result.composed_of.as_str()));
-        props.insert("domain".to_string(),       PropertyValue::from("StrikeWarfare"));
-        props.insert("status".to_string(),       PropertyValue::from("有效"));
-        props.insert("update_time".to_string(),  PropertyValue::from("now"));
+        props.insert("id".to_string(), PropertyValue::from(sid));
+        props.insert("iri".to_string(), PropertyValue::from(code));
+        props.insert("code".to_string(), PropertyValue::from(code));
+        props.insert("name".to_string(), PropertyValue::from(name));
+        props.insert("attacker".to_string(), PropertyValue::from(a_code.as_str()));
+        props.insert("target".to_string(), PropertyValue::from(t_code.as_str()));
+        props.insert("weapon_type".to_string(), PropertyValue::from(weapon_type));
+        props.insert(
+            "distance_m".to_string(),
+            PropertyValue::Float(result.distance_m),
+        );
+        props.insert(
+            "in_range".to_string(),
+            PropertyValue::Boolean(result.in_range),
+        );
+        props.insert(
+            "hit_probability".to_string(),
+            PropertyValue::Float(result.hit_probability),
+        );
+        props.insert(
+            "damage_level".to_string(),
+            PropertyValue::from(result.damage_level.as_str()),
+        );
+        props.insert(
+            "total_time_s".to_string(),
+            PropertyValue::Float(result.total_time_s),
+        );
+        props.insert("duration".to_string(), PropertyValue::from(result.duration));
+        props.insert(
+            "precondition".to_string(),
+            PropertyValue::from(result.precondition.as_str()),
+        );
+        props.insert(
+            "effect".to_string(),
+            PropertyValue::from(result.effect.as_str()),
+        );
+        props.insert(
+            "cost".to_string(),
+            PropertyValue::from(result.cost.as_str()),
+        );
+        props.insert(
+            "composedOf".to_string(),
+            PropertyValue::from(result.composed_of.as_str()),
+        );
+        props.insert("domain".to_string(), PropertyValue::from("StrikeWarfare"));
+        props.insert("status".to_string(), PropertyValue::from("有效"));
+        props.insert("update_time".to_string(), PropertyValue::from("now"));
 
-        let _ = app.repo.delete_node(code);
-        if let Err(e) = app.repo.insert_node(&Node::new(vec!["Strike".to_string()], props)) {
+        // 以 id 为技术锚点执行删除（id 为空则回退到 code）
+        let delete_key = if sid.is_empty() { code } else { sid };
+        let _ = app.repo.delete_node(delete_key);
+        if let Err(e) = app.repo.insert_node(&Node::new(
+            vec![unified_mapping::STRIKE_LABEL.to_string()],
+            props,
+        )) {
             return (500, json_error(e.to_string()));
         }
 
@@ -214,7 +303,10 @@ fn handle_post(
         }));
     }
 
-    (201, serde_json::json!({ "ok": true, "count": results.len(), "strikes": results }).to_string())
+    (
+        201,
+        serde_json::json!({ "ok": true, "count": results.len(), "strikes": results }).to_string(),
+    )
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -234,13 +326,19 @@ fn check_preconditions(
         }
     };
 
-    let patrol_precondition = strike.get("precondition")
-        .and_then(|v| v.as_str()).unwrap_or("");
+    let patrol_precondition = strike
+        .get("precondition")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let entity_precondition = entity_node
         .property("precondition")
-        .and_then(|v| v.as_str()).unwrap_or("");
-    let entity_code = entity_node.property("code").and_then(|v| v.as_str()).unwrap_or("?");
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let entity_code = entity_node
+        .property("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
 
     let checks = [
         ("打击任务", patrol_precondition.to_string()),
@@ -250,7 +348,9 @@ fn check_preconditions(
     let mut failures = Vec::new();
 
     for (source, swrl) in &checks {
-        if swrl.is_empty() { continue; }
+        if swrl.is_empty() {
+            continue;
+        }
 
         // greaterThanOrEqual(var, threshold)
         if let Some(pos) = swrl.find("greaterThanOrEqual(") {
@@ -260,11 +360,18 @@ fn check_preconditions(
                 let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
                 if parts.len() == 2 {
                     let field_name = parts[0].trim_start_matches("?x.").trim_start_matches('?');
-                    let threshold: f64 = match parts[1].parse() { Ok(v) => v, Err(_) => { logf!(&log_path, "   ⚠ SWRL阈值解析失败: '{}'", parts[1]); continue } };
+                    let threshold: f64 = match parts[1].parse() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            logf!(&log_path, "   ⚠ SWRL阈值解析失败: '{}'", parts[1]);
+                            continue;
+                        }
+                    };
                     let actual = prop_as_f64(entity_node.property(field_name)).unwrap_or(0.0);
                     if actual < threshold {
                         failures.push(format!(
-                            "[{}] {}: {}={} < {} 不满足", source, field_name, entity_code, actual, threshold
+                            "[{}] {}: {}={} < {} 不满足",
+                            source, field_name, entity_code, actual, threshold
                         ));
                     }
                 }
@@ -279,11 +386,15 @@ fn check_preconditions(
                 let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
                 if parts.len() == 2 {
                     let field_name = parts[0].trim_start_matches("?x.").trim_start_matches('?');
-                    let threshold: f64 = match parts[1].parse() { Ok(v) => v, Err(_) => continue };
+                    let threshold: f64 = match parts[1].parse() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
                     let actual = prop_as_f64(entity_node.property(field_name)).unwrap_or(0.0);
                     if actual <= threshold {
                         failures.push(format!(
-                            "[{}] {}: {}={} <= {} 不满足", source, field_name, entity_code, actual, threshold
+                            "[{}] {}: {}={} <= {} 不满足",
+                            source, field_name, entity_code, actual, threshold
                         ));
                     }
                 }
@@ -299,10 +410,14 @@ fn check_preconditions(
                 if parts.len() == 2 {
                     let field_name = parts[0].trim_start_matches("?x.").trim_start_matches('?');
                     let expected = parts[1].trim_matches('\'').trim_matches('"');
-                    let actual = entity_node.property(field_name).and_then(|v| v.as_str()).unwrap_or("");
+                    let actual = entity_node
+                        .property(field_name)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if actual != expected {
                         failures.push(format!(
-                            "[{}] {}: {}='{}' != '{}' 不满足", source, field_name, entity_code, actual, expected
+                            "[{}] {}: {}='{}' != '{}' 不满足",
+                            source, field_name, entity_code, actual, expected
                         ));
                     }
                 }
@@ -314,7 +429,9 @@ fn check_preconditions(
         (true, String::new())
     } else {
         logf!(&log_path, "   ⛔ 前置条件失败:");
-        for f in &failures { logf!(&log_path, "     {}", f); }
+        for f in &failures {
+            logf!(&log_path, "     {}", f);
+        }
         (false, failures.join("; "))
     }
 }
@@ -343,7 +460,10 @@ fn find_entity(app: &crate::app::AppState, code: &str) -> Option<Node> {
     if code.is_empty() {
         return None;
     }
-    let all = app.repo.get_nodes_by_label("Entity").unwrap_or_default();
+    let all = app
+        .repo
+        .get_nodes_by_label(unified_mapping::ENTITY_LABEL)
+        .unwrap_or_default();
     for n in &all {
         if n.property("code").and_then(|v| v.as_str()) == Some(code) {
             return Some(n.clone());

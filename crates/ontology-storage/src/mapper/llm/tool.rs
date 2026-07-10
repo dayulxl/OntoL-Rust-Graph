@@ -231,8 +231,14 @@ mod tests {
     #[test]
     fn build_query_tool_definition() {
         let params = JsonSchema::new()
-            .with_required("class_iri", PropertySchema::scalar("string", "类的 IRI 标识符"))
-            .with_optional("limit", PropertySchema::scalar("integer", "返回结果的最大数量"));
+            .with_required(
+                "class_iri",
+                PropertySchema::scalar("string", "类的 IRI 标识符"),
+            )
+            .with_optional(
+                "limit",
+                PropertySchema::scalar("integer", "返回结果的最大数量"),
+            );
 
         let tool = ToolDefinition::new(
             "query_individuals_by_class",

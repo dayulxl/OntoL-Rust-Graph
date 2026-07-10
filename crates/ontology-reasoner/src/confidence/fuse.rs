@@ -61,7 +61,10 @@ impl ConfidenceFuse {
     }
 
     /// 使用策略中的阈值创建熔断器
-    pub fn with_policy(rule_name: impl Into<String>, policy: &crate::confidence::policy::ConfidencePolicy) -> Self {
+    pub fn with_policy(
+        rule_name: impl Into<String>,
+        policy: &crate::confidence::policy::ConfidencePolicy,
+    ) -> Self {
         Self::new(rule_name, policy.threshold())
     }
 
@@ -137,7 +140,11 @@ mod tests {
         let result = fuse.guard(0.25);
         assert!(result.is_err());
         match result {
-            Err(ReasonerError::ConfidenceFuse { confidence, threshold, rule_name }) => {
+            Err(ReasonerError::ConfidenceFuse {
+                confidence,
+                threshold,
+                rule_name,
+            }) => {
                 assert!((confidence - 0.25).abs() < f64::EPSILON);
                 assert!((threshold - 0.3).abs() < f64::EPSILON);
                 assert_eq!(rule_name, "test_rule");

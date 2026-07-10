@@ -1,13 +1,10 @@
 //! POST /reason — 触发 SWRL 规则推理。
 
-use std::sync::{Arc, Mutex};
-use crate::app::AppState;
 use super::super::server::json_error;
+use crate::app::AppState;
+use std::sync::{Arc, Mutex};
 
-pub fn handle(
-    request: &mut tiny_http::Request,
-    state: &Arc<Mutex<AppState>>,
-) -> (u16, String) {
+pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) -> (u16, String) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
         return (400, json_error("Failed to read body".into()));
@@ -25,16 +22,23 @@ pub fn handle(
     // 可选规则
     if let Some(rules) = q.get("rules").and_then(|v| v.as_array()) {
         for rule in rules {
-            if let Some(text) = rule.as_str() {
-                if let Err(e) = app.reasoner.load_swrl_rule(text) {
-                    return (400, json_error(format!("Rule parse: {}", e)));
-                }
+            if let Some(text) = rule.as_str()
+                && let Err(e) = app.reasoner.load_swrl_rule(text)
+            {
+                return (400, json_error(format!("Rule parse: {}", e)));
             }
         }
     }
 
-    let incremental = q.get("incremental").and_then(|v| v.as_bool()).unwrap_or(false);
-    let result = if incremental { app.reasoner.reason_incremental() } else { app.reasoner.reason() };
+    let incremental = q
+        .get("incremental")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let result = if incremental {
+        app.reasoner.reason_incremental()
+    } else {
+        app.reasoner.reason()
+    };
 
     match result {
         Ok(report) => {
@@ -55,7 +59,12 @@ pub fn handle(
             (200, resp.to_string())
         }
         Err(e) => {
-            if let ontology_reasoner::ReasonerError::ConfidenceFuse { confidence, threshold, rule_name } = &e {
+            if let ontology_reasoner::ReasonerError::ConfidenceFuse {
+                confidence,
+                threshold,
+                rule_name,
+            } = &e
+            {
                 let resp = serde_json::json!({
                     "error": "confidence_fuse_tripped",
                     "confidence": confidence, "threshold": threshold, "rule_name": rule_name,

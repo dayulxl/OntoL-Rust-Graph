@@ -145,7 +145,7 @@ impl ClassExpression {
     }
 
     /// ¬C
-    pub fn not(self) -> Self {
+    pub fn negate(self) -> Self {
         ClassExpression::Complement(Box::new(self))
     }
 
@@ -200,7 +200,9 @@ impl ClassExpression {
             ClassExpression::Top => "Top".to_string(),
             ClassExpression::Bottom => "Bottom".to_string(),
             ClassExpression::ClassName(n) => format!("ClassName({})", n),
-            ClassExpression::Intersection(l, r) => format!("Intersection({},{})", l.to_key(), r.to_key()),
+            ClassExpression::Intersection(l, r) => {
+                format!("Intersection({},{})", l.to_key(), r.to_key())
+            }
             ClassExpression::Union(l, r) => format!("Union({},{})", l.to_key(), r.to_key()),
             ClassExpression::Complement(c) => format!("Complement({})", c.to_key()),
             ClassExpression::AllValuesFrom { property, filler } => {
@@ -209,13 +211,25 @@ impl ClassExpression {
             ClassExpression::SomeValuesFrom { property, filler } => {
                 format!("SomeValuesFrom({},{})", property, filler.to_key())
             }
-            ClassExpression::MinCardinality { n, property, filler } => {
+            ClassExpression::MinCardinality {
+                n,
+                property,
+                filler,
+            } => {
                 format!("MinCardinality({},{},{})", n, property, filler.to_key())
             }
-            ClassExpression::MaxCardinality { n, property, filler } => {
+            ClassExpression::MaxCardinality {
+                n,
+                property,
+                filler,
+            } => {
                 format!("MaxCardinality({},{},{})", n, property, filler.to_key())
             }
-            ClassExpression::ExactCardinality { n, property, filler } => {
+            ClassExpression::ExactCardinality {
+                n,
+                property,
+                filler,
+            } => {
                 format!("ExactCardinality({},{},{})", n, property, filler.to_key())
             }
             ClassExpression::OneOf(iris) => {
@@ -228,8 +242,12 @@ impl ClassExpression {
     /// 从文本 key 反序列化（SWRL Query atom 解析用）
     pub fn from_key(s: &str) -> Result<Self, String> {
         let s = s.trim();
-        if s == "Top" { return Ok(ClassExpression::Top); }
-        if s == "Bottom" { return Ok(ClassExpression::Bottom); }
+        if s == "Top" {
+            return Ok(ClassExpression::Top);
+        }
+        if s == "Bottom" {
+            return Ok(ClassExpression::Bottom);
+        }
 
         if let Some(inner) = strip_prefix(s, "ClassName(") {
             return Ok(ClassExpression::class(inner));
@@ -238,38 +256,66 @@ impl ClassExpression {
             return Ok(ClassExpression::SelfRestriction(inner.to_string()));
         }
         if let Some(inner) = strip_prefix(s, "Complement(") {
-            return ClassExpression::from_key(inner).map(|c| c.not());
+            return ClassExpression::from_key(inner).map(|c| c.negate());
         }
         if let Some(inner) = strip_prefix(s, "AllValuesFrom(") {
             let parts = split_at_comma(inner, 1)?;
-            return Ok(ClassExpression::all(parts[0], ClassExpression::from_key(parts[1])?));
+            return Ok(ClassExpression::all(
+                parts[0],
+                ClassExpression::from_key(parts[1])?,
+            ));
         }
         if let Some(inner) = strip_prefix(s, "SomeValuesFrom(") {
             let parts = split_at_comma(inner, 1)?;
-            return Ok(ClassExpression::some(parts[0], ClassExpression::from_key(parts[1])?));
+            return Ok(ClassExpression::some(
+                parts[0],
+                ClassExpression::from_key(parts[1])?,
+            ));
         }
         if let Some(inner) = strip_prefix(s, "Intersection(") {
             let parts = split_at_comma(inner, 1)?;
-            return Ok(ClassExpression::from_key(parts[0])?.and(ClassExpression::from_key(parts[1])?));
+            return Ok(
+                ClassExpression::from_key(parts[0])?.and(ClassExpression::from_key(parts[1])?)
+            );
         }
         if let Some(inner) = strip_prefix(s, "Union(") {
             let parts = split_at_comma(inner, 1)?;
-            return Ok(ClassExpression::from_key(parts[0])?.or(ClassExpression::from_key(parts[1])?));
+            return Ok(
+                ClassExpression::from_key(parts[0])?.or(ClassExpression::from_key(parts[1])?)
+            );
         }
         if let Some(inner) = strip_prefix(s, "MinCardinality(") {
             let parts = split_at_comma(inner, 2)?;
-            let n: u32 = parts[0].parse().map_err(|e| format!("bad cardinality: {}", e))?;
-            return Ok(ClassExpression::min(n, parts[1], ClassExpression::from_key(parts[2])?));
+            let n: u32 = parts[0]
+                .parse()
+                .map_err(|e| format!("bad cardinality: {}", e))?;
+            return Ok(ClassExpression::min(
+                n,
+                parts[1],
+                ClassExpression::from_key(parts[2])?,
+            ));
         }
         if let Some(inner) = strip_prefix(s, "MaxCardinality(") {
             let parts = split_at_comma(inner, 2)?;
-            let n: u32 = parts[0].parse().map_err(|e| format!("bad cardinality: {}", e))?;
-            return Ok(ClassExpression::max(n, parts[1], ClassExpression::from_key(parts[2])?));
+            let n: u32 = parts[0]
+                .parse()
+                .map_err(|e| format!("bad cardinality: {}", e))?;
+            return Ok(ClassExpression::max(
+                n,
+                parts[1],
+                ClassExpression::from_key(parts[2])?,
+            ));
         }
         if let Some(inner) = strip_prefix(s, "ExactCardinality(") {
             let parts = split_at_comma(inner, 2)?;
-            let n: u32 = parts[0].parse().map_err(|e| format!("bad cardinality: {}", e))?;
-            return Ok(ClassExpression::exact(n, parts[1], ClassExpression::from_key(parts[2])?));
+            let n: u32 = parts[0]
+                .parse()
+                .map_err(|e| format!("bad cardinality: {}", e))?;
+            return Ok(ClassExpression::exact(
+                n,
+                parts[1],
+                ClassExpression::from_key(parts[2])?,
+            ));
         }
         if let Some(inner) = strip_prefix(s, "OneOf(") {
             let iris: Vec<String> = inner.split(';').map(|s| s.trim().to_string()).collect();
@@ -296,7 +342,11 @@ fn split_at_comma(s: &str, expected: usize) -> Result<Vec<&str>, String> {
     for (i, ch) in s.char_indices() {
         match ch {
             '(' => depth += 1,
-            ')' => { if depth > 0 { depth -= 1; } }
+            ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
             ',' if depth == 0 => {
                 parts.push(&s[start..i]);
                 start = i + 1;
@@ -306,7 +356,12 @@ fn split_at_comma(s: &str, expected: usize) -> Result<Vec<&str>, String> {
     }
     parts.push(&s[start..]);
     if parts.len() != expected + 1 {
-        return Err(format!("expected {} parts, got {} in '{}'", expected + 1, parts.len(), s));
+        return Err(format!(
+            "expected {} parts, got {} in '{}'",
+            expected + 1,
+            parts.len(),
+            s
+        ));
     }
     Ok(parts.iter().map(|p| p.trim()).collect())
 }
@@ -384,9 +439,7 @@ pub enum QueryType {
     },
 
     /// 检查个体 `individual` 是否属于表达式描述的类
-    IsInstanceOf {
-        individual_iri: String,
-    },
+    IsInstanceOf { individual_iri: String },
 }
 
 // ═══════════════════════════════════════════════════════════

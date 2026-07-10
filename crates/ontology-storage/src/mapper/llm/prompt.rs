@@ -99,10 +99,7 @@ fn build_description(nodes: &[Node], rels: &[Relationship]) -> String {
 
     // 统计信息 — Node.labels 是 pub 字段
     let class_nodes: Vec<_> = nodes.iter().filter(|n| n.has_label("Class")).collect();
-    let individual_nodes: Vec<_> = nodes
-        .iter()
-        .filter(|n| n.has_label("Individual"))
-        .collect();
+    let individual_nodes: Vec<_> = nodes.iter().filter(|n| n.has_label("Individual")).collect();
 
     if !class_nodes.is_empty() || !individual_nodes.is_empty() {
         desc.push_str(&format!(
