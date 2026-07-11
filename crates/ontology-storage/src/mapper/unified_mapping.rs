@@ -11,6 +11,26 @@
 //! **Layer 2** — 双向查找表 (LazyLock<HashMap>): 标签 ↔ 实体类型, 关系 ↔ 公理
 //! **Layer 3** — 便捷函数 + 预组合切片
 //!
+//! # 推理边约定
+//!
+//! 本模块定义的核心 OWL 关系常量（`subClassOf`、`INSTANCE_OF`、`HAS_PROPERTY` 等）是
+//! **隐式推理边**——它们是 OWL2 语义基础，由 `OwlAxiomPredicate` 和 `owl_axiom_for_relation()`
+//! 直接识别，无需也不使用语言前缀。
+//!
+//! **领域扩展关系**（非 OWL 标准的关系类型）若要被推理引擎处理，必须使用 6 种语言前缀命名：
+//!
+//! ```text
+//! swrl:hasEnemy   → 推理边，SWRL 引擎处理
+//! owl2:衍生自      → 推理边，DWL2 引擎处理
+//! sh:validate      → 推理边，SHACL 引擎处理
+//! rule:forwardChain → 推理边，推理方向控制
+//! action:check     → 推理边，LLM 模糊推理
+//! function:calc    → 推理边，LLM JSON 调用
+//! 移动             → 非推理边，仅展示/结构遍历
+//! ```
+//!
+//! 详见 CLAUDE.md §13「推理边/推理属性前缀规范」。
+//!
 //! # 使用
 //!
 //! ```rust,ignore
@@ -137,6 +157,29 @@ pub const UNION_OF_REL: &str = "unionOf";
 
 /// `owl:oneOf` — 枚举
 pub const ONE_OF_REL: &str = "oneOf";
+
+/// 本体语义层关系常量合集 — 所有 W3C OWL2/RDFS 标准关系。
+///
+/// 这些关系编码了本体的语义结构（类层次、实例归属、属性约束等）。
+/// 推理机在处理时**优先于** SWRL/SHACL/rule/action/function 层。
+/// 也用于 `is_ontology_relation()` 判断。
+pub const ONTOLOGY_SEMANTIC_RELS: &[&str] = &[
+    INSTANCE_OF_REL,     // rdf:type — 类归属
+    SUB_CLASS_OF_REL,    // rdfs:subClassOf — 类层次
+    SUB_PROPERTY_OF_REL, // rdfs:subPropertyOf — 属性层次
+    HAS_PROPERTY_REL,
+    HAS_RANGE_REL,
+    HAS_VALUE_REL,
+    EQUIVALENT_CLASS_REL,
+    DISJOINT_WITH_REL,
+    SAME_AS_REL,
+    DIFFERENT_FROM_REL,
+    INVERSE_OF_REL,
+    COMPLEMENT_OF_REL,
+    INTERSECTION_OF_REL,
+    UNION_OF_REL,
+    ONE_OF_REL,
+];
 
 // ── 属性键 (编码注释属性 + OWL 方面, OWL2 §2.3-2.4) ──
 

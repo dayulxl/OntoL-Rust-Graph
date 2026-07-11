@@ -585,6 +585,7 @@ fn dispatch_infer_forward(
         direction: direction_str.parse::<Direction>().unwrap_or_default(),
         confidence_threshold,
         cope_version: Some(cope_version.to_string()),
+        inference_only: true,
     };
 
     let result = explorer.explore(&config)?;

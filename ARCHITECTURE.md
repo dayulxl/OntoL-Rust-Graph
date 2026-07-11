@@ -113,7 +113,7 @@ pub struct ServerConfig {
     pub graph_uri: String,             // ONTOLOGY_GRAPH_URI, 默认 memgraph://localhost:7687
     pub graph_user: String,            // ONTOLOGY_GRAPH_USER, 默认空
     pub graph_password: String,        // ONTOLOGY_GRAPH_PASSWORD, 默认空
-    pub default_mode: OperationMode,   // ONTOLOGY_MODE, 默认 Exercise
+    pub default_mode: InferenceMode,   // ONTOLOGY_MODE, 默认 Balanced
     pub log_level: String,             // RUST_LOG, 默认 info
 }
 ```
@@ -213,7 +213,7 @@ POST /context (目标形态)
 
 ### 7.2 置信度策略持久化
 
-- 运行时调用 `POST /confidence/policy` 的同时写入 Memgraph 配置节点 `(:Config { key: "policy", mode: "WarFighting" })`
+- 运行时调用 `POST /confidence/policy` 的同时写入 Memgraph 配置节点 `(:Config { key: "policy", mode: "Balanced" })`
 - 启动时 `Reasoner::new()` 从 Memgraph 读取 `(:Config)` 节点，存在则恢复策略，不存在则用默认
 - `GET /confidence/policy` 返回当前策略 + 是否持久化标记
 
@@ -261,7 +261,7 @@ ONTOLOGY_PORT=8085                                # HTTP 端口，默认 8085
 ONTOLOGY_GRAPH_URI=memgraph://localhost:7687        # Memgraph Bolt API 地址
 ONTOLOGY_GRAPH_USER=                                # 图数据库用户名，默认空
 ONTOLOGY_GRAPH_PASSWORD=                            # 图数据库密码，默认空
-ONTOLOGY_MODE=Exercise                             # 默认推理策略: Exercise|WarFighting|Training
+ONTOLOGY_MODE=Balanced                             # 默认推理策略: Balanced|Permissive|Strict
 RUST_LOG=info                                      # 日志级别 (tracing/env_logger)
 ```
 
@@ -495,7 +495,7 @@ MATCH (n:Entity) SET n.location = null
 | POST | `/infer-forward` | ✅ | 向前推理 — 自动遍历+状态推断+规则匹配+下一步预测 |
 | POST | `/ontology/create` | ✅ | LLM 创建本体（Entity/Type/Patrol + 批量） |
 | POST | `/relationships/create` | ✅ | LLM 创建关系（自动节点解析） |
-| POST | `/confidence/policy` | ✅ | 切换作战模式（Exercise/WarFighting/Training） |
+| POST | `/confidence/policy` | ✅ | 切换推理策略（Balanced/Permissive/Strict） |
 | GET\|POST | `/rules` | ✅ | GET 列出已加载规则；POST 从 Memgraph/文件热加载 SWRL 规则 |
 | GET\|PUT | `/confidence/policy` | 📋 | 查询/持久化策略 |
 

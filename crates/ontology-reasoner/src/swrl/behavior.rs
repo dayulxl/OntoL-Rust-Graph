@@ -416,35 +416,60 @@ pub fn execute_effect(
     let parsed = parse_language_expression(text);
 
     match parsed {
-        Ok(pe) => match pe.prefix {
-            LanguagePrefix::Swrl => {
-                // SWRL 规则执行
-                let parser = SwrlParser::new();
-                let rule = parser
-                    .parse(&pe.body)
-                    .map_err(|e| format!("SWRL 解析失败: {}", e))?;
-                let results = engine
-                    .execute_rule(&rule)
-                    .map_err(|e| format!("SWRL 执行失败: {}", e))?;
-                Ok(results.iter().map(|r| r.derived_facts.len()).sum())
-            }
-            LanguagePrefix::Shacl => {
-                // SHACL 验证效果（记录验证但不写入图）
-                log::info!(
-                    "hasEffect SHACL 验证: '{}' — 验证通过（仅检查合规性）",
-                    pe.body
+        Ok(pe) => {
+            // 空 body：仅前缀标记，无具体表达式，跳过执行
+            if pe.body.trim().is_empty() {
+                log::debug!(
+                    "hasEffect 前缀 {:?} 无表达式体，跳过执行（仅标记为推理边）",
+                    pe.prefix
                 );
-                Ok(0)
+                return Ok(0);
             }
-            LanguagePrefix::Owl2 => {
-                // DWL2 查询效果（记录查询但不写入图）
-                log::info!(
-                    "hasEffect OWL2 查询: '{}' — 查询通过（仅检查存在性）",
-                    pe.body
-                );
-                Ok(0)
+            match pe.prefix {
+                LanguagePrefix::Swrl => {
+                    // SWRL 规则执行
+                    let parser = SwrlParser::new();
+                    let rule = parser
+                        .parse(&pe.body)
+                        .map_err(|e| format!("SWRL 解析失败: {}", e))?;
+                    let results = engine
+                        .execute_rule(&rule)
+                        .map_err(|e| format!("SWRL 执行失败: {}", e))?;
+                    Ok(results.iter().map(|r| r.derived_facts.len()).sum())
+                }
+                LanguagePrefix::Shacl => {
+                    // SHACL 验证效果（记录验证但不写入图）
+                    log::info!(
+                        "hasEffect SHACL 验证: '{}' — 验证通过（仅检查合规性）",
+                        pe.body
+                    );
+                    Ok(0)
+                }
+                LanguagePrefix::Owl2 => {
+                    // DWL2 查询效果（记录查询但不写入图）
+                    log::info!(
+                        "hasEffect OWL2 查询: '{}' — 查询通过（仅检查存在性）",
+                        pe.body
+                    );
+                    Ok(0)
+                }
+                LanguagePrefix::Rule => {
+                    // 推理链方向设定（rule:forwardChain / rule:backward）
+                    log::info!("hasEffect 推理方向设定: '{}'", pe.body);
+                    Ok(0)
+                }
+                LanguagePrefix::Action => {
+                    // 自定义动作 — 对接大模型模糊推理
+                    log::info!("hasEffect 自定义动作 (LLM 模糊推理): '{}'", pe.body);
+                    Ok(0)
+                }
+                LanguagePrefix::Function => {
+                    // 自定义函数 — JSON 格式 LLM 调用
+                    log::info!("hasEffect 自定义函数 (LLM JSON 调用): '{}'", pe.body);
+                    Ok(0)
+                }
             }
-        },
+        }
         Err(_) => {
             // 无前缀 → 默认尝试 SWRL 解析
             let parser = SwrlParser::new();

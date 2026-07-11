@@ -17,7 +17,7 @@
 | POST | `/infer-forward` | `infer.rs` | 向前推理（自动遍历+状态推断+规则匹配+预测） |
 | POST | `/ontology/create` | `ontology_create.rs` | LLM 创建本体（Entity/Type/Patrol + 批量） |
 | POST | `/relationships/create` | `ontology_relationship.rs` | LLM 创建关系（自动节点解析） |
-| POST | `/confidence/policy` | `confidence_policy.rs` | 切换作战模式（Exercise/WarFighting/Training） |
+| POST | `/confidence/policy` | `confidence_policy.rs` | 切换推理策略（Balanced/Permissive/Strict） |
 | GET\|POST | `/rules` | `rules.rs` | GET 列出已加载规则；POST 热加载 SWRL 规则 |
 
 ## patrol.rs 核心流程

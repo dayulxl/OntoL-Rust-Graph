@@ -21,7 +21,7 @@ Base: `http://localhost:8085`
 | POST | `/infer-forward` | 向前推理（自动遍历+状态推断+规则匹配+预测） |
 | POST | `/ontology/create` | LLM 创建本体（Entity/Type/Patrol + 批量） |
 | POST | `/relationships/create` | LLM 创建关系（自动节点解析） |
-| POST | `/confidence/policy` | 切换作战模式（Exercise/WarFighting/Training） |
+| POST | `/confidence/policy` | 切换推理策略（Balanced/Permissive/Strict） |
 | GET\|POST | `/rules` | GET 列出已加载规则；POST 热加载 SWRL 规则 |
 
 ---
@@ -537,10 +537,10 @@ Content-Type: application/json
 
 ```json
 // 请求
-{ "mode": "WarFighting" }
+{ "mode": "Permissive" }
 
 // 响应 200
-{ "ok": true, "mode": "WarFighting", "threshold": 0.7 }
+{ "ok": true, "mode": "Permissive", "threshold": 0.15 }
 ```
 
 ---

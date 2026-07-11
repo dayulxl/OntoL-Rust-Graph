@@ -4,6 +4,7 @@ pub mod context;
 pub mod entity_update;
 pub mod health;
 pub mod infer;
+pub mod infer_on_nodes;
 pub mod nl_query;
 pub mod ontology_create;
 pub mod ontology_relationship;

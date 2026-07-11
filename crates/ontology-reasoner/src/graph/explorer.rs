@@ -10,6 +10,8 @@ use std::sync::Arc;
 use ontology_storage::mapper::graph::node::Node;
 use ontology_storage::repository::graph_store::GraphRepository;
 
+use crate::language::is_inference_relation;
+
 use super::util::{self, RelCount, RuleMatch};
 
 /// 共享仓库类型
@@ -73,6 +75,11 @@ pub struct ExploreConfig {
     /// 副本版本号：遍历过程中遇到 Entity 节点时，
     /// 如果节点的 cope_version 不匹配，则克隆副本
     pub cope_version: Option<String>,
+    /// 是否仅遍历推理边（默认 true）。
+    /// - `true` + `relation` 为空 → 只跟随 `owl2:` / `swrl:` / `sh:` 前缀的关系
+    /// - `true` + `relation` 非空 → 跟随指定关系（不受推理前缀限制）
+    /// - `false` → 不施加推理前缀过滤（向后兼容）
+    pub inference_only: bool,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -251,6 +258,13 @@ impl GraphExplorer {
                     .get_relationships(&current_id, rel_filter)
                     .unwrap_or_default()
                 {
+                    // 推理边过滤：未指定具体关系 + inference_only 时，只跟随推理边
+                    if config.inference_only
+                        && rel_filter.is_none()
+                        && !is_inference_relation(&r.rel_type)
+                    {
+                        continue;
+                    }
                     relations.push((true, r));
                 }
             }
@@ -258,6 +272,12 @@ impl GraphExplorer {
                 for r in
                     util::find_incoming_relationships(self.repo.as_ref(), &current_id, rel_filter)
                 {
+                    if config.inference_only
+                        && rel_filter.is_none()
+                        && !is_inference_relation(&r.rel_type)
+                    {
+                        continue;
+                    }
                     relations.push((false, r));
                 }
             }
@@ -305,8 +325,11 @@ impl GraphExplorer {
                     "rules",
                 );
 
-                let target_outgoing =
-                    util::predict_next_steps(self.repo.as_ref(), &effective_target_id);
+                let target_outgoing = util::predict_next_steps(
+                    self.repo.as_ref(),
+                    &effective_target_id,
+                    config.inference_only,
+                );
 
                 // ── 置信度检查（读取节点自身 confidence 属性） ──
                 let node_confidence =

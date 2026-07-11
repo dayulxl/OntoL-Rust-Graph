@@ -10,6 +10,8 @@ use ontology_storage::mapper::graph::relationship::Relationship;
 use ontology_storage::mapper::unified_mapping;
 use ontology_storage::repository::graph_store::GraphRepository;
 
+use crate::language::is_inference_relation;
+
 // ═══════════════════════════════════════════════════════════
 // 公开类型
 // ═══════════════════════════════════════════════════════════
@@ -159,6 +161,155 @@ pub fn find_incoming_relationships(
     results
 }
 
+/// 获取节点的全部关系（出向 + 入向）。
+///
+/// `get_relationships` 只返回出向，此函数合并出向和入向关系。
+pub fn get_all_relationships(repo: &dyn GraphRepository, node_id: &str) -> Vec<Relationship> {
+    let mut all = repo.get_relationships(node_id, None).unwrap_or_default();
+    let incoming = find_incoming_relationships(repo, node_id, None);
+    all.extend(incoming);
+    all
+}
+
+// ═══════════════════════════════════════════════════════════
+// 属性继承 — OWL2/RDFS 本体语义层
+// ═══════════════════════════════════════════════════════════
+
+/// 元数据属性键 — 这些属性不参与继承（避免覆盖标识信息）。
+const META_KEYS: &[&str] = &["code", "id", "iri", "name", "cope_version", "snowflake_id"];
+
+/// 沿类型链向上收集父类型的所有属性。
+///
+/// 1. 从实体的 `type` 属性或 `INSTANCE_OF` 关系定位类型节点
+/// 2. 沿 `subClassOf` 链向上遍历所有祖先类型
+/// 3. 收集每个祖先 Type 节点的属性（排除元数据键如 name/iri/code）
+///
+/// 返回的 HashMap 中 key=属性名, value=(属性值, 来源类型名)。
+/// 祖先越远越先插入，子类型靠近的在后面覆盖。
+pub fn collect_parent_properties(
+    repo: &dyn GraphRepository,
+    entity: &Node,
+) -> HashMap<String, PropertyValue> {
+    let mut inherited: HashMap<String, PropertyValue> = HashMap::new();
+
+    // 1. 找到实体的类型名
+    let type_name = entity
+        .property("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if type_name.is_empty() {
+        return inherited;
+    }
+
+    // 2. 构建类型层次链（同 get_type_ancestors 逻辑）
+    let types = repo
+        .get_nodes_by_label(unified_mapping::TYPE_LABEL)
+        .unwrap_or_default();
+    let mut parent_map: HashMap<String, String> = HashMap::new();
+
+    for t in &types {
+        let tname = t.property("name").and_then(|v| v.as_str()).unwrap_or("");
+        if tname.is_empty() {
+            continue;
+        }
+        let rels = repo.get_relationships(tname, None).unwrap_or_default();
+        for r in &rels {
+            if r.rel_type == unified_mapping::SUB_CLASS_OF_REL
+                && let Ok(Some(pn)) = repo.get_node(&r.end_node_id)
+                && let Some(pname) = pn.property("name").and_then(|v| v.as_str())
+            {
+                parent_map.insert(tname.to_string(), pname.to_string());
+            }
+        }
+    }
+
+    // 3. 收集完整的祖先链（从子到顶层）
+    let mut chain: Vec<String> = Vec::new();
+    let mut current = type_name.clone();
+    for _ in 0..20 {
+        if let Some(parent) = parent_map.get(&current) {
+            chain.push(parent.clone());
+            current = parent.clone();
+        } else {
+            break;
+        }
+    }
+
+    // 4. 从远到近收集属性（父 → 子方向插入，HashMap 后插入的覆盖先插入的）
+    for ancestor_name in chain.iter().rev() {
+        if let Some(ancestor_node) = types.iter().find(|t| {
+            t.property("name")
+                .and_then(|v| v.as_str())
+                .map(|n| n == ancestor_name.as_str())
+                .unwrap_or(false)
+        }) {
+            for (key, value) in &ancestor_node.properties {
+                if META_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
+                inherited.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    inherited
+}
+
+/// 属性继承展开：返回合并了父类型属性后的新 Node（不写入图）。
+///
+/// 合并策略：**父底 + 子覆盖**（子自身属性优先级高于继承属性）。
+///
+/// 步骤：
+/// 1. 收集父类型链全部属性（`collect_parent_properties`）
+/// 2. 用实体自身属性覆盖同名继承属性
+/// 3. 返回属性合并后的新 Node
+pub fn inherit_entity_properties(repo: &dyn GraphRepository, entity: &Node) -> Node {
+    let parent_props = collect_parent_properties(repo, entity);
+
+    // 父底 + 子覆盖
+    let mut merged = parent_props;
+    for (key, value) in &entity.properties {
+        merged.insert(key.clone(), value.clone());
+    }
+
+    Node::new(entity.labels.clone(), merged)
+}
+
+/// 克隆实体到指定版本，使用给定的属性（而非实体原始属性）。
+///
+/// 与 `ensure_cope_version` 的区别：此函数使用调用方提供的合并后属性，
+/// 而非直接复用原始实体的属性。用于属性继承展开后的副本创建。
+pub fn ensure_cope_version_with_props(
+    repo: &dyn GraphRepository,
+    original_code: &str,
+    target_version: &str,
+    labels: &[String],
+    merged_props: &HashMap<String, PropertyValue>,
+) -> Result<String, String> {
+    let new_code = format!("{}_v{}", original_code, target_version);
+
+    // 副本已存在 → 直接返回
+    if let Ok(Some(_existing)) = repo.get_node(&new_code) {
+        return Ok(new_code);
+    }
+
+    // 构造副本节点 — 使用提供的合并后属性
+    let mut new_props = merged_props.clone();
+    new_props.insert(
+        "cope_version".to_string(),
+        PropertyValue::from(target_version),
+    );
+    new_props.insert("code".to_string(), PropertyValue::from(new_code.as_str()));
+
+    let cloned = Node::new(labels.to_vec(), new_props);
+    repo.insert_node(&cloned)
+        .map_err(|e| format!("clone insert '{}': {}", new_code, e))?;
+
+    Ok(new_code)
+}
+
 /// 对关系列表做分组摘要 — 按关系类型聚合，返回计数和示例目标。
 pub fn summarize_relations(rels: &[Relationship]) -> Vec<RelCount> {
     let mut counts: HashMap<String, (usize, Vec<String>)> = HashMap::new();
@@ -299,11 +450,20 @@ pub fn find_matching_rules(
 // ═══════════════════════════════════════════════════════════
 
 /// 分析目标节点的出向关系，按频次降序排列，用于预测可能的后续操作。
-pub fn predict_next_steps(repo: &dyn GraphRepository, node_id: &str) -> Vec<RelCount> {
+///
+/// 当 `inference_only` 为 `true` 时，仅汇总推理边（`owl2:` / `swrl:` / `sh:` 前缀的关系）。
+pub fn predict_next_steps(
+    repo: &dyn GraphRepository,
+    node_id: &str,
+    inference_only: bool,
+) -> Vec<RelCount> {
     let rels = repo.get_relationships(node_id, None).unwrap_or_default();
     let mut counts: HashMap<String, (usize, Vec<String>)> = HashMap::new();
 
     for r in &rels {
+        if inference_only && !is_inference_relation(&r.rel_type) {
+            continue;
+        }
         let entry = counts.entry(r.rel_type.clone()).or_insert((0, Vec::new()));
         entry.0 += 1;
         if entry.1.len() < 3 {
@@ -585,8 +745,14 @@ pub fn clone_nodes_selective(
         code_map.insert(old_code.clone(), new_code);
 
         // ── 3. 查询关系，发现关联本体对象 ──
+        // 仅跟随推理边（owl2:/swrl:/sh: 前缀）进行发现；
+        // 非推理边不参与本体对象发现
         let out_rels = repo.get_relationships(&old_code, None).unwrap_or_default();
         for r in &out_rels {
+            // 非推理边跳过 — 不用于发现本体对象
+            if !is_inference_relation(&r.rel_type) {
+                continue;
+            }
             let target_id = &r.end_node_id;
             if processed.contains(target_id.as_str()) {
                 continue;

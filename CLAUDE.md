@@ -161,7 +161,7 @@ powershell -NoProfile -Command '
 🔌 连接 Memgraph ( @ memgraph://localhost:7687)...
    ✅ Memgraph 连接成功
 
-   默认策略: Exercise, 阈值: 0.30
+   推理策略: Balanced, 阈值: 0.30
 
 🚀 启动 HTTP 服务: http://0.0.0.0:8085
 ```
@@ -202,7 +202,7 @@ ONTOLOGY_GRAPH_URI=memgraph://localhost:7687
 ONTOLOGY_GRAPH_USER=
 ONTOLOGY_GRAPH_PASSWORD=
 ONTOLOGY_PORT=8085
-ONTOLOGY_MODE=Exercise
+ONTOLOGY_MODE=Balanced
 RUST_LOG=info
 ```
 
@@ -249,7 +249,8 @@ curl http://localhost:8085/health
 | POST | `/relationships/create` | 创建关系 |
 | POST | `/tools/call` | 工具调用 |
 | GET/POST | `/rules` | 规则管理 |
-| POST | `/infer-forward` | 前向推理 |
+| POST | `/infer-forward` | 前向推理（BFS 图遍历） |
+| POST | `/infer-on-nodes` | 推理机流水线（继承→克隆→推理→校验，逐层处理） |
 | POST | `/entity/update` | 修改实体属性 |
 
 ### 6.4 行为动作引擎（BehaviorAction）
@@ -653,3 +654,218 @@ fn current_epoch_ms() -> i64 {
 - [Rust API 设计指南](https://rust-lang.github.io/api-guidelines/)
 - [CMMI 5 级过程域概览](https://cmmiinstitute.com/cmmi/dev)
 - [Twitter Snowflake ID 原始公告](https://blog.twitter.com/engineering/en_us/a/2010/announcing-snowflake)
+
+---
+
+## 13. 推理边/推理属性前缀规范
+
+> **核心原则**：图中关系和属性通过 6 种前缀标记为"推理边/推理属性"。
+> 推理引擎只处理带前缀的边和属性，不带前缀的不处理（仅用于展示和结构遍历）。
+
+### 13.1 前缀约定（6 种）
+
+| 序号 | 编码前缀 | 名称 | 格式示例 | 路由目标 | 说明 |
+|------|----------|------|----------|----------|------|
+| 1 | `owl2:` | OWL2 DL 语言 | `owl2:ObjectIntersectionOf(:Person :Employee)` | DWL2 查询引擎 | OWL2-DL 描述逻辑，类表达式/实例检索 |
+| 2 | `swrl:` | SWRL 语言 | `swrl:Person(?x) ^ hasAge(?x, ?a) -> Adult(?x)` | SWRL 规则推理引擎 | 规则匹配、前向链推导 |
+| 3 | `sh:` | SHACL 语言 | `sh:property [ sh:path :name; sh:minCount 1 ]` | SHACL 验证引擎 | 节点合规性校验 |
+| 4 | `rule:` | 规则设定 | `rule:forwardChain` / `rule:backward` | 推理引擎 | 推理链方向控制，默认前向链 |
+| 5 | `action:` | 自定义动作接口 | `action:validate_entity` | LLM 模糊推理 | 对接大模型模糊推理，无内容时默认 `action:` |
+| 6 | `function:` | 自定义函数 | `function:{"id":"图ID","func":"函数名"}` | LLM JSON 调用 | 对接大模型，用 JSON 实现 |
+
+> 此约定与 `crates/ontology-reasoner/src/language.rs` 中的 `LanguagePrefix` 枚举一致。
+
+### 13.2 关系类型（边标签）前缀规则
+
+```
+图中关系（边）:
+  swrl:hasEnemy      ──→ 推理边，SWRL 引擎处理
+  owl2:someValuesFrom  ──→ 推理边，DWL2 引擎处理
+  sh:property         ──→ 推理边，SHACL 引擎处理
+  rule:forwardChain   ──→ 推理边，推理方向控制
+  action:check        ──→ 推理边，LLM 模糊推理
+  function:calc       ──→ 推理边，LLM JSON 调用
+  移动                ──→ 非推理边，仅展示/结构遍历，不触发推理
+  打击                ──→ 非推理边，同上
+```
+
+规则：
+- **带前缀** → 推理引擎捡起处理，按前缀路由到对应引擎
+- **不带前缀** → 推理引擎跳过，不处理
+- **只有前缀没有内容**（如关系类型就是 `swrl:`）→ 仍是有效的推理边，继续推理（body 为空时不执行具体规则，但边本身参与遍历/克隆/发现）
+
+### 13.3 属性前缀规则
+
+图中属性键和属性值同样适用 6 种前缀约定。属性键或值以上表任一前缀开头时，视为推理相关属性。
+
+```
+节点属性:
+  hasEffect: "swrl:Person(?x) ^ hasAge(?x, ?a) -> Adult(?x)"
+             └── SWRL 语言表达式，路由到 SWRL 引擎
+
+  rule:forwardChain    └── 推理方向设定
+  action:do_something  └── LLM 模糊推理动作
+  function:{"id":"N1","func":"f"}  └── JSON 函数调用
+```
+
+规则同关系类型：带前缀处理，不带前缀跳过。
+
+### 13.4 空 body 规则
+
+前缀后内容为空时**不报错**，仍为有效推理边/属性：
+
+| 输入 | 处理 |
+|------|------|
+| `swrl:` | 有效推理边 → SWRL 引擎，body 为空，无规则执行，但参与遍历 |
+| `owl2:` | 有效推理边 → DWL2 引擎，body 为空 |
+| `sh:` | 有效推理边 → SHACL 引擎，body 为空 |
+| `rule:` | 有效推理边 → 默认前向链推理 |
+| `action:` | 有效推理边 → 默认 LLM 模糊推理 |
+| `function:` | 有效推理边 → LLM JSON 调用 |
+
+> 实现：`parse_language_expression("swrl:")` 返回 `Ok(ParsedExpression { prefix: Swrl, body: "" })`，
+> 各引擎收到空 body 时跳过执行返回 `Ok(0)`，不中断链路。这是宽容执行原则（§19）的体现。
+
+### 13.5 工具函数
+
+`language.rs` 提供以下公共函数：
+
+```rust
+/// 检查字符串是否以任一推理前缀开头（6 种）
+pub fn is_inference_prefix(s: &str) -> bool;
+
+/// 检查关系类型是否为推理边（语义别名）
+pub fn is_inference_relation(rel_type: &str) -> bool;
+
+/// 提取推理前缀类型（不要求 body 非空）
+pub fn classify_inference_prefix(s: &str) -> Option<LanguagePrefix>;
+
+/// 按前缀分类字符串（批量处理边/属性）
+pub fn classify_strings_by_prefix(strings: &[String]) -> HashMap<LanguagePrefix, Vec<String>>;
+
+/// 判断关系是否属于本体语义层 (owl2: 前缀 + ONTOLOGY_SEMANTIC_RELS)
+pub fn is_ontology_relation(rel_type: &str) -> bool;
+```
+
+`graph/util.rs` 提供属性继承核心函数：
+
+```rust
+/// 获取节点的全部关系 (出向 + 入向)
+pub fn get_all_relationships(repo, node_id) -> Vec<Relationship>;
+
+/// 沿类型链向上收集父类型全部属性
+pub fn collect_parent_properties(repo, entity) -> HashMap<String, PropertyValue>;
+
+/// 属性继承展开: 父底 + 子覆盖, 返回合并后的新 Node (不写入图)
+pub fn inherit_entity_properties(repo, entity) -> Node;
+
+/// 克隆到场景版本, 使用给定的合并后属性
+pub fn ensure_cope_version_with_props(repo, original_code, version, labels, merged_props) -> Result<String>;
+```
+
+`unified_mapping.rs` 提供本体语义层常量：
+
+```rust
+/// 本体语义层关系常量合集 (subClassOf, INSTANCE_OF, ... 共 15 个)
+pub const ONTOLOGY_SEMANTIC_RELS: &[&str];
+```
+
+### 13.6 与 unified_mapping 核心 OWL 常量的关系
+
+`unified_mapping.rs` 中定义的核心 OWL 关系常量（如 `subClassOf`、`INSTANCE_OF`、`HAS_PROPERTY` 等）是**隐式推理边**：
+- 它们是 OWL2 语义的基础关系，由 `OwlAxiomPredicate` 枚举和 `owl_axiom_for_relation()` 双向查找表直接识别
+- 不需要也不使用前缀（保持与 W3C OWL2 规范一致）
+- DWL2/SWRL/SHACL 引擎通过 `unified_mapping` 常量直接引用它们
+
+**领域自定义关系**（如 `hasEnemy`、`移动`、`打击`）：
+- 如果要被推理引擎处理 → 必须带 6 种前缀之一（如 `swrl:hasEnemy`、`action:check`）
+- 如果不带前缀 → 仅作为展示/结构边，不触发推理
+
+```
+OWL 语义层（隐式推理边，无需前缀）:
+  subClassOf, INSTANCE_OF, HAS_PROPERTY, equivalentClass, disjointWith, ...
+
+领域扩展层（必须带前缀才触发推理）:
+  swrl:hasEnemy, owl2:移动, sh:validate, rule:forwardChain, action:check, function:calc
+  移动, 打击, 侦察, ...  ← 不带前缀，仅展示用
+```
+
+### 13.7 与 BehaviorAction 的关系
+
+Entity 的 `hasEffect` 字段已使用 6 种语言前缀路由（参见 §6.4），路由规则如下：
+
+| 前缀 | 路由 |
+|------|------|
+| `swrl:` | SWRL 规则解析 + 执行 |
+| `sh:` | SHACL 验证（仅检查合规性） |
+| `owl2:` | DWL2 查询（仅检查存在性） |
+| `rule:` | 推理方向设定（记录日志） |
+| `action:` | LLM 模糊推理（记录日志） |
+| `function:` | LLM JSON 调用（记录日志） |
+| 无前缀 | 默认尝试 SWRL 解析 |
+
+`hasPrecondition` 字段使用 SHACL 语法但不要求 `sh:` 前缀（因为前置条件语义已由字段名 `hasPrecondition` 确定）。
+
+### 13.8 代码约束
+
+| 规则 | 说明 |
+|------|------|
+| **INFER-001** | BFS 遍历未指定关系类型时，默认只跟随推理边（`is_inference_relation()` 过滤） |
+| **INFER-002** | `clone_nodes_selective()` 只跟随推理边进行本体对象发现 |
+| **INFER-003** | `predict_next_steps()` 默认只汇总推理边 |
+| **INFER-004** | 不带前缀的领域关系不被推理引擎处理，不参与克隆/发现/预测 |
+| **INFER-005** | 新创建的领域关系若要触发推理，必须用 6 种推理前缀之一起名 |
+| **INFER-006** | `parse_language_expression()` 接受空 body，不报错 |
+| **INFER-007** | 各引擎收到空 body 时跳过执行，返回 Ok(0)，不中断链路 |
+| **INFER-008** | 本体语义层关系（`ONTOLOGY_SEMANTIC_RELS` + `owl2:` 前缀）优先于其他推理层处理 |
+| **INFER-009** | `is_ontology_relation()` 判断关系是否属于本体语义层 |
+| **INFER-010** | 推理流水线：先继承后克隆，先本体后关系，先推理后校验；一层一层推理，一层一层复制 |
+
+### 13.9 两层处理体系
+
+推理引擎将所有关系分为两层，**本体语义层始终优先处理**：
+
+```
+第 1 层 — 本体语义层 (OWL2/RDFS), 最先处理:
+  ├─ unified_mapping 核心 OWL/RDFS 常量 (subClassOf, INSTANCE_OF, HAS_PROPERTY, ...)
+  ├─ owl2: 前缀的关系
+  └─ 用途: 属性继承、类层次解析、实例归属判断
+
+第 2 层 — 推理执行层, 本体就绪后处理:
+  ├─ swrl: / sh: / rule: / action: / function: 前缀的关系
+  └─ 用途: 规则推理、约束验证、LLM 集成
+```
+
+**判断函数**：
+
+```rust
+/// 本体语义层: owl2: 前缀 + ONTOLOGY_SEMANTIC_RELS 核心常量
+pub fn is_ontology_relation(rel_type: &str) -> bool;
+
+/// 推理层: 全部 6 种前缀 (owl2:/swrl:/sh:/rule:/action:/function:)
+pub fn is_inference_relation(rel_type: &str) -> bool;
+```
+
+### 13.10 推理流水线 (reason_on_nodes)
+
+```
+输入: node_names + expressions + cope_version
+
+Step 1 ── 按名称查找原始实体
+Step 2 ── 解析表达式前缀 + 预加载 SWRL 规则
+Step 3 ── 逐层 BFS 处理:
+  对本层每个实体:
+    a. 获取全部关系 (出向 + 入向)
+    b. 属性继承展开 (OWL2/RDFS 层优先, 父属性 ∪ 子属性, 子覆盖父)
+    c. 复制到场景版本 (含继承后属性)
+    d. 对该实体独立推理 (行为引擎 + SWRL + DWL2)
+    e. 沿推理边发现下游本体 → 加入下一层
+Step 4 ── 全部本体就绪后, 复制副本间的关系
+Step 5 ── SHACL 校验 (推理后验证合规性)
+```
+
+**原则**：
+- **一层一层推理，一层一层复制** — 一层有几个本体就复制几个本体，关联几个本体就复制几个本体
+- **每个本体独立推理** — 不是所有本体一起推，而是每个本体独立走完 inherit → copy → reason
+- **先继承后克隆** — OWL2/RDFS 关系先解析继承，属性合并完成后再克隆副本
+- **先推理后校验** — SWRL/DWL2 推理全部完成后，SHACL 最后验证合规性

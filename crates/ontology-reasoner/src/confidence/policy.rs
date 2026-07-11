@@ -2,7 +2,7 @@
 //!
 //! 替代全局阈值 0.3，支持：
 //! - 按数据来源 (source) 动态调整权重
-//! - 按作战模式 (OperationMode) 切换熔断阈值
+//! - 按推理模式 (InferenceMode) 切换熔断阈值
 //! - Policy 外部注入，而非引擎内部硬编码
 
 /// 数据来源类别 — 决定置信度权重
@@ -44,38 +44,43 @@ impl std::str::FromStr for SourceCategory {
     }
 }
 
-/// 作战模式 — 决定熔断阈值
+/// 推理模式 — 决定熔断阈值
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OperationMode {
-    /// 战时 — 阈值 0.15（宽松，保留更多线索）
-    WarFighting,
-    /// 训练 — 阈值 0.50（严格，保证数据纯净）
-    Training,
-    /// 演习 — 阈值 0.30（默认）
+pub enum InferenceMode {
+    /// 宽松 — 阈值 0.15（低门槛，保留更多线索）
+    Permissive,
+    /// 均衡 — 阈值 0.30（默认）
     #[default]
-    Exercise,
+    Balanced,
+    /// 严格 — 阈值 0.50（高标准，保证数据质量）
+    Strict,
 }
 
-impl OperationMode {
+impl InferenceMode {
     /// 返回该模式的熔断阈值
     pub fn threshold(&self) -> f64 {
         match self {
-            OperationMode::WarFighting => 0.15,
-            OperationMode::Training => 0.50,
-            OperationMode::Exercise => 0.30,
+            InferenceMode::Permissive => 0.15,
+            InferenceMode::Balanced => 0.30,
+            InferenceMode::Strict => 0.50,
         }
     }
 }
 
-impl std::str::FromStr for OperationMode {
+impl std::str::FromStr for InferenceMode {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "warfighting" | "war" | "war_fighting" => Ok(OperationMode::WarFighting),
-            "training" | "train" => Ok(OperationMode::Training),
-            "exercise" | "ex" | "default" => Ok(OperationMode::Exercise),
-            _ => Err(format!("未知作战模式: {}", s)),
+            // 新名
+            "permissive" | "perm" | "loose" => Ok(InferenceMode::Permissive),
+            "balanced" | "bal" | "standard" | "default" => Ok(InferenceMode::Balanced),
+            "strict" | "precision" | "precise" => Ok(InferenceMode::Strict),
+            // 旧名兼容
+            "warfighting" | "war" | "war_fighting" => Ok(InferenceMode::Permissive),
+            "exercise" | "ex" => Ok(InferenceMode::Balanced),
+            "training" | "train" => Ok(InferenceMode::Strict),
+            _ => Err(format!("未知推理模式: {}", s)),
         }
     }
 }
@@ -83,20 +88,20 @@ impl std::str::FromStr for OperationMode {
 /// 置信度策略 — 外部注入引擎
 #[derive(Debug, Clone, Default)]
 pub struct ConfidencePolicy {
-    /// 当前作战模式
-    pub mode: OperationMode,
+    /// 当前推理模式
+    pub mode: InferenceMode,
     /// 每类数据来源的权重覆盖（None = 使用默认权重）
     source_weight_overrides: std::collections::HashMap<SourceCategory, f64>,
 }
 
 impl ConfidencePolicy {
-    /// 创建新策略（默认 Exercise 模式）
+    /// 创建新策略（默认 Balanced 模式）
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 指定作战模式创建
-    pub fn with_mode(mode: OperationMode) -> Self {
+    /// 指定推理模式创建
+    pub fn with_mode(mode: InferenceMode) -> Self {
         Self {
             mode,
             source_weight_overrides: std::collections::HashMap::new(),
@@ -116,8 +121,8 @@ impl ConfidencePolicy {
             .unwrap_or_else(|| source.default_weight())
     }
 
-    /// 切换作战模式
-    pub fn switch_mode(&mut self, mode: OperationMode) {
+    /// 切换推理模式
+    pub fn switch_mode(&mut self, mode: InferenceMode) {
         self.mode = mode;
     }
 
@@ -140,9 +145,9 @@ mod tests {
 
     #[test]
     fn test_mode_thresholds() {
-        assert!((OperationMode::WarFighting.threshold() - 0.15).abs() < f64::EPSILON);
-        assert!((OperationMode::Training.threshold() - 0.50).abs() < f64::EPSILON);
-        assert!((OperationMode::Exercise.threshold() - 0.30).abs() < f64::EPSILON);
+        assert!((InferenceMode::Permissive.threshold() - 0.15).abs() < f64::EPSILON);
+        assert!((InferenceMode::Balanced.threshold() - 0.30).abs() < f64::EPSILON);
+        assert!((InferenceMode::Strict.threshold() - 0.50).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -160,7 +165,7 @@ mod tests {
     #[test]
     fn test_policy_switch_mode() {
         let mut policy = ConfidencePolicy::default();
-        policy.switch_mode(OperationMode::WarFighting);
+        policy.switch_mode(InferenceMode::Permissive);
         assert!((policy.threshold() - 0.15).abs() < f64::EPSILON);
     }
 
@@ -174,20 +179,34 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_operation_mode() {
+    fn test_parse_inference_mode() {
+        // 新名
         assert_eq!(
-            OperationMode::from_str("WarFighting").ok(),
-            Some(OperationMode::WarFighting)
+            InferenceMode::from_str("Permissive").ok(),
+            Some(InferenceMode::Permissive)
         );
         assert_eq!(
-            OperationMode::from_str("training").ok(),
-            Some(OperationMode::Training)
+            InferenceMode::from_str("balanced").ok(),
+            Some(InferenceMode::Balanced)
         );
         assert_eq!(
-            OperationMode::from_str("ex").ok(),
-            Some(OperationMode::Exercise)
+            InferenceMode::from_str("strict").ok(),
+            Some(InferenceMode::Strict)
         );
-        assert!(OperationMode::from_str("unknown").is_err());
+        // 旧名兼容
+        assert_eq!(
+            InferenceMode::from_str("WarFighting").ok(),
+            Some(InferenceMode::Permissive)
+        );
+        assert_eq!(
+            InferenceMode::from_str("exercise").ok(),
+            Some(InferenceMode::Balanced)
+        );
+        assert_eq!(
+            InferenceMode::from_str("training").ok(),
+            Some(InferenceMode::Strict)
+        );
+        assert!(InferenceMode::from_str("unknown").is_err());
     }
 
     #[test]

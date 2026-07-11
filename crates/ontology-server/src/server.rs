@@ -41,6 +41,7 @@ pub fn start(config: ServerConfig, state: Arc<Mutex<AppState>>) {
     println!("   POST http://localhost:{}/tools/call", config.port);
     println!("   GET|POST http://localhost:{}/rules", config.port);
     println!("   POST http://localhost:{}/infer-forward", config.port);
+    println!("   POST http://localhost:{}/infer-on-nodes", config.port);
     println!("   POST http://localhost:{}/entity/update", config.port);
     println!();
 
@@ -125,6 +126,7 @@ fn dispatch(
                 return routes::ontology_relationship::handle(request, state);
             }
             "/infer-forward" => return routes::infer::handle(request, state),
+            "/infer-on-nodes" => return routes::infer_on_nodes::handle(request, state),
             "/entity/update" => return routes::entity_update::handle(request, state),
             "/tools/call" => return routes::tools_call::handle(request, state),
             _ => {}
@@ -147,6 +149,7 @@ fn dispatch(
         "/rules",
         "/tools/call",
         "/infer-forward",
+        "/infer-on-nodes",
         "/entity/update",
     ];
     if known.contains(&path) {

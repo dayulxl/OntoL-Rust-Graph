@@ -116,6 +116,7 @@ pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) ->
             direction: direction.parse::<Direction>().unwrap_or_default(),
             confidence_threshold,
             cope_version: Some(cope_version),
+            inference_only: true,
         };
 
         let threshold = config.confidence_threshold;

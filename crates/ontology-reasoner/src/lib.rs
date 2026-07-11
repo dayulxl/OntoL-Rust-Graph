@@ -73,14 +73,16 @@ mod reasoner;
 
 pub use confidence::calculator::{ConfidenceCalculator, ConfidenceInput, ConfidenceWeights};
 pub use confidence::fuse::{CONFIDENCE_THRESHOLD, ConfidenceFuse, FuseState};
-pub use confidence::policy::{ConfidencePolicy, OperationMode, SourceCategory};
+pub use confidence::policy::{ConfidencePolicy, InferenceMode, SourceCategory};
 pub use dwl2::ast::{
     Cardinality, ClassExpression, Dwl2Query, Dwl2Result, PropertyRestriction, Quantifier, QueryType,
 };
 pub use dwl2::query::Dwl2QueryEngine;
 pub use error::ReasonerError;
 pub use language::{
-    LanguagePrefix, ParsedExpression, group_expressions, parse_language_expression,
+    GroupedExpressions, LanguagePrefix, ParsedExpression, classify_inference_prefix,
+    classify_strings_by_prefix, group_expressions, is_inference_prefix, is_inference_relation,
+    is_ontology_relation, parse_language_expression,
 };
 pub use query_plan::{QueryPlan, QueryResult};
 pub use reasoner::{
@@ -102,9 +104,10 @@ pub use timeline::model::{Segment, TimelineInput, TimelineResult, WaypointInput}
 pub use graph::detector::{DefaultStateChangeDetector, StateChangeDetector};
 pub use graph::explorer::{Direction, ExploreConfig, ExploreHop, ExploreResult, GraphExplorer};
 pub use graph::util::{
-    RelCount, RuleMatch, clone_all_for_version, clone_nodes_selective, delete_by_cope_version,
-    ensure_cope_version, find_entity_any, find_incoming_relationships, find_matching_rules,
-    get_type_ancestors, predict_next_steps, prop_as_f64, summarize_relations, truncate_str,
+    RelCount, RuleMatch, clone_all_for_version, clone_nodes_selective, collect_parent_properties,
+    delete_by_cope_version, ensure_cope_version, ensure_cope_version_with_props, find_entity_any,
+    find_incoming_relationships, find_matching_rules, get_all_relationships, get_type_ancestors,
+    inherit_entity_properties, predict_next_steps, prop_as_f64, summarize_relations, truncate_str,
     update_entity_properties,
 };
 

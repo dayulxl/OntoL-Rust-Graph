@@ -18,4 +18,4 @@ pub mod policy;
 
 pub use calculator::ConfidenceCalculator;
 pub use fuse::ConfidenceFuse;
-pub use policy::{ConfidencePolicy, OperationMode, SourceCategory};
+pub use policy::{ConfidencePolicy, InferenceMode, SourceCategory};

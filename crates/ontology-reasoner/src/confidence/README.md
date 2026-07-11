@@ -10,7 +10,7 @@
 |------|------|
 | `calculator.rs` | 4 维加权置信度计算 |
 | `fuse.rs` | 熔断器 (< threshold → abort) |
-| `policy.rs` | ✅ 策略引擎 (SourceCategory + OperationMode + ConfidencePolicy) |
+| `policy.rs` | ✅ 策略引擎 (SourceCategory + InferenceMode + ConfidencePolicy) |
 
 ## ConfidenceCalculator
 
@@ -30,7 +30,7 @@ pub struct ConfidenceInput {
 
 ```rust
 pub struct ConfidencePolicy {
-    pub mode: OperationMode,  // WarFighting(0.15) / Training(0.50) / Exercise(0.30)
+    pub mode: InferenceMode,  // Permissive(0.15) / Strict(0.50) / Balanced(0.30)
     source_weight_overrides,  // 按 SourceCategory 覆盖权重
 }
 ```
@@ -44,7 +44,7 @@ SonarRealtime(0.45) > Satellite(0.30) > Historical(0.25) > Unknown(0.20)
 ## HTTP 端点
 
 ```
-POST /confidence/policy  { "mode": "WarFighting" }
+POST /confidence/policy  { "mode": "Permissive" }
 ```
 
 ## 约束

@@ -8,7 +8,7 @@
 
 use super::super::server::json_error;
 use crate::app::AppState;
-use ontology_reasoner::{ConfidencePolicy, OperationMode};
+use ontology_reasoner::{ConfidencePolicy, InferenceMode};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -29,13 +29,13 @@ pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) ->
 
     // 切换模式
     if let Some(mode_str) = q.get("mode").and_then(|v| v.as_str()) {
-        match OperationMode::from_str(mode_str) {
+        match InferenceMode::from_str(mode_str) {
             Ok(mode) => app.reasoner.switch_policy_mode(mode),
             Err(_) => {
                 return (
                     400,
                     json_error(format!(
-                        "Unknown mode: {}. Use: WarFighting, Training, Exercise",
+                        "Unknown mode: {}. Use: Permissive, Balanced, Strict",
                         mode_str
                     )),
                 );
@@ -56,8 +56,8 @@ pub fn handle(request: &mut tiny_http::Request, state: &Arc<Mutex<AppState>>) ->
 
 fn policy_mode_to_str(policy: &ConfidencePolicy) -> &str {
     match policy.mode {
-        OperationMode::WarFighting => "WarFighting",
-        OperationMode::Training => "Training",
-        OperationMode::Exercise => "Exercise",
+        InferenceMode::Permissive => "Permissive",
+        InferenceMode::Strict => "Strict",
+        InferenceMode::Balanced => "Balanced",
     }
 }

@@ -37,7 +37,7 @@ fn main() {
         .build();
 
     println!(
-        "   默认策略: {:?}, 阈值: {:.2}",
+        "   推理策略: {:?}, 阈值: {:.2}",
         cfg.default_mode,
         reasoner.policy().threshold()
     );
