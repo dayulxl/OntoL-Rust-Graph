@@ -426,6 +426,14 @@ pub fn execute_effect(
                 return Ok(0);
             }
             match pe.prefix {
+                LanguagePrefix::Rdfs => {
+                    // RDFS 基础类型系统 — 记录但不执行（本体语义层在 reason_on_nodes 中预处理）
+                    log::debug!(
+                        "hasEffect RDFS 语义: '{}' — 本体语义层由推理机预处理",
+                        pe.body
+                    );
+                    Ok(0)
+                }
                 LanguagePrefix::Swrl => {
                     // SWRL 规则执行
                     let parser = SwrlParser::new();

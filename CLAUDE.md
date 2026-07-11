@@ -662,16 +662,17 @@ fn current_epoch_ms() -> i64 {
 > **核心原则**：图中关系和属性通过 6 种前缀标记为"推理边/推理属性"。
 > 推理引擎只处理带前缀的边和属性，不带前缀的不处理（仅用于展示和结构遍历）。
 
-### 13.1 前缀约定（6 种）
+### 13.1 前缀约定（7 种）
 
 | 序号 | 编码前缀 | 名称 | 格式示例 | 路由目标 | 说明 |
 |------|----------|------|----------|----------|------|
-| 1 | `owl2:` | OWL2 DL 语言 | `owl2:ObjectIntersectionOf(:Person :Employee)` | DWL2 查询引擎 | OWL2-DL 描述逻辑，类表达式/实例检索 |
-| 2 | `swrl:` | SWRL 语言 | `swrl:Person(?x) ^ hasAge(?x, ?a) -> Adult(?x)` | SWRL 规则推理引擎 | 规则匹配、前向链推导 |
-| 3 | `sh:` | SHACL 语言 | `sh:property [ sh:path :name; sh:minCount 1 ]` | SHACL 验证引擎 | 节点合规性校验 |
-| 4 | `rule:` | 规则设定 | `rule:forwardChain` / `rule:backward` | 推理引擎 | 推理链方向控制，默认前向链 |
-| 5 | `action:` | 自定义动作接口 | `action:validate_entity` | LLM 模糊推理 | 对接大模型模糊推理，无内容时默认 `action:` |
-| 6 | `function:` | 自定义函数 | `function:{"id":"图ID","func":"函数名"}` | LLM JSON 调用 | 对接大模型，用 JSON 实现 |
+| 1 | `rdfs:` | RDFS 语言 | `rdfs:subClassOf domain` | 本体语义层 | RDFS 基础类型系统（subClassOf、domain、range 等） |
+| 2 | `owl2:` | OWL2 DL 语言 | `owl2:ObjectIntersectionOf(:Person :Employee)` | DWL2 查询引擎 | OWL2-DL 描述逻辑，类表达式/实例检索（主力） |
+| 3 | `swrl:` | SWRL 语言 | `swrl:Person(?x) ^ hasAge(?x, ?a) -> Adult(?x)` | SWRL 规则推理引擎 | 推理规则表达 |
+| 4 | `sh:` | SHACL 语言 | `sh:property [ sh:path :name; sh:minCount 1 ]` | SHACL 验证引擎 | 数据校验约束 |
+| 5 | `rule:` | 规则设定 | `rule:forwardChain` / `rule:backward` | 推理引擎 | 前链/后链，默认前向链 |
+| 6 | `action:` | 自定义动作 | `action:启动巡逻` | LLM 模糊推理 | 后面写汉字，大模型自主判断执行什么动作 |
+| 7 | `function:` | 自定义函数 | `function:{"id":"图ID","func":"函数名"}` | LLM JSON 调用 | 对接大模型，用 JSON 实现 |
 
 > 此约定与 `crates/ontology-reasoner/src/language.rs` 中的 `LanguagePrefix` 枚举一致。
 
