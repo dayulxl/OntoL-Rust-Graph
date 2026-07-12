@@ -259,6 +259,8 @@ pub const BEHAVIOR_FIELD_KEYS: &[&str] = &[
 
 /// `id` — 技术主键 (UUID, TEXT, NOT NULL)
 pub const STD_ID_KEY: &str = "id";
+/// 图原始 id — 副本节点上记录的原节点技术主键，用于溯源
+pub const GRAPH_ID_KEY: &str = "graph_id";
 
 /// `name` — 名称 (TEXT)
 pub const STD_NAME_KEY: &str = "name";
@@ -287,6 +289,7 @@ pub const IS_SYSTEM_KEY: &str = "is_system";
 /// 所有标准审计字段属性键（遍历用）
 pub const STD_AUDIT_KEYS: &[&str] = &[
     STD_ID_KEY,
+    GRAPH_ID_KEY,
     STD_NAME_KEY,
     STD_CODE_KEY,
     CREATE_TIME_KEY,

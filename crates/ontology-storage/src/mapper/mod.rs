@@ -22,6 +22,7 @@ pub mod graph;
 pub mod iri_normalizer;
 pub mod model_mapper;
 pub mod property_converter;
+pub mod query_plan;
 pub mod unified_mapping;
 
 #[cfg(feature = "llm")]

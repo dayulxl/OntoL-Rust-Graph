@@ -234,6 +234,22 @@ pub fn handle() -> (u16, String) {
                     "required": ["rel_type"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "infer_on_nodes_id",
+                "description": "图内置ID向前推理链：从起始节点原生 id(n) 出发，沿推理边逐跳发现下游节点，一跳一跳遍历直到终点。每跳执行三阶段：Step1 属性继承+克隆副本→Step2 SWRL规则匹配+置信度传播→Step3 JSONPath/func提取。节点间按置信度传播链串联，低于阈值分支自动阻断。结果通过 NDJSON 流式逐事件返回。接口: POST /infer-on-nodes-id-fc",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "node_ids": { "type": "array", "items": { "type": "string" }, "description": "起始节点的技术主键 id 列表，不能为空" },
+                        "confidence": { "type": "number", "description": "初始置信度 0.0~1.0，默认 0.8。BFS 传播中节点有 confidence 属性时相乘，低于阈值阻断分支" },
+                        "cope_version": { "type": "string", "description": "场景副本版本 UUID。全部推理在副本上执行，不污染原数据" }
+                    },
+                    "required": ["node_ids", "cope_version"]
+                }
+            }
         }
     ]);
 

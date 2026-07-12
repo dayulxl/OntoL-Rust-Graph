@@ -16,7 +16,6 @@ use crate::confidence::policy::{ConfidencePolicy, InferenceMode};
 use crate::dwl2::ast::{ClassExpression, Dwl2Query, Dwl2Result, QueryType};
 use crate::dwl2::query::Dwl2QueryEngine;
 use crate::error::ReasonerError;
-use crate::language;
 use crate::swrl::ast::{ExecutionStats, InferenceResult, Rule};
 use crate::swrl::engine::SwrlEngine;
 use crate::swrl::parser::SwrlParser;
@@ -316,378 +315,43 @@ impl Reasoner {
     // 按节点推理 — 选择性克隆 + 语言前缀路由 + 迭代循环
     // ═══════════════════════════════════════════════════════
 
-    /// 对指定节点执行推理。
+    /// 对指定节点执行 BFS 推理流水线 — 委托给 GIE 推理机。
     ///
-    /// ## 流水线 (layer-by-layer)
+    /// ## 置信度传播
     ///
-    /// - Step 1: find entities by name
-    /// - Step 2: parse expression prefixes, preload SWRL rules
-    /// - Step 3: BFS layer processing
-    ///   For each entity in current layer:
-    ///   a. get all relationships (outgoing + incoming)
-    ///   b. property inheritance (OWL2/RDFS first): parent type props -> child
-    ///   c. copy to scene version (with inherited properties)
-    ///   d. reason on this entity independently (behavior + SWRL)
-    ///   e. discover downstream entities via inference edges -> next layer
-    /// - Step 4: after all entities ready, copy relationships between copies
-    /// - Step 5: SHACL validation (verify after reasoning)
+    /// - 节点有 `confidence` 属性 → 当前值 × 节点值
+    /// - 节点无 `confidence` 属性 → 当前值不变，继续
+    /// - 低于引擎阈值 → 停止此分支下游传播
     ///
-    /// Core principle: **inherit before clone, ontology before relations,
-    /// reason before validate**.
-    /// Each entity independently goes through inherit -> copy -> reason,
-    /// one layer at a time.
+    /// ## cope_version
+    ///
+    /// 推理在副本上执行，原实体不受影响。
     pub fn reason_on_nodes(
         &mut self,
         request: ReasonOnNodesRequest,
     ) -> Result<ReasonOnNodesReport, ReasonerError> {
-        use crate::graph::util;
-        use crate::graph::util::find_entity_any;
-        use std::collections::{HashMap, HashSet, VecDeque};
+        use crate::gie::engine::{InferenceEngine, InferenceRequest};
 
-        let start_time = Instant::now();
-        let mut report = ReasonOnNodesReport::new(request.cope_version.clone());
+        let gie_request = InferenceRequest {
+            node_ids: request.node_ids,
+            confidence: request.confidence,
+            cope_version: request.cope_version,
+        };
 
-        // ═══════════════════════════════════════════════════════
-        // Step 1: 按名称查找原始实体
-        // ═══════════════════════════════════════════════════════
-        let mut seed_codes: Vec<String> = Vec::new();
-        for name in &request.node_names {
-            match find_entity_any(self.repo.as_ref(), name) {
-                Some(node) => {
-                    let code = node
-                        .property("code")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(name)
-                        .to_string();
-                    seed_codes.push(code);
-                }
-                None => {
-                    log::warn!("节点 '{}' 未找到，跳过", name);
-                }
-            }
-        }
+        let mut engine = InferenceEngine::new(Arc::clone(&self.repo))
+            .with_policy(self.policy.clone());
 
-        if seed_codes.is_empty() {
-            return Err(ReasonerError::SwrlExecution(
-                "未找到任何匹配的节点".to_string(),
-            ));
-        }
+        let gie_report = engine.reason_on_nodes(gie_request)?;
 
-        log::info!(
-            "reason_on_nodes: 种子实体 {} 个, 版本 '{}'",
-            seed_codes.len(),
-            request.cope_version
-        );
-
-        // ═══════════════════════════════════════════════════════
-        // Step 2: 解析表达式前缀 + 预加载 SWRL 规则
-        // ═══════════════════════════════════════════════════════
-        let grouped = language::group_expressions(&request.expressions)
-            .map_err(ReasonerError::SwrlExecution)?;
-
-        let mut swrl_rules: Vec<Rule> = Vec::new();
-        for rule_text in &grouped.swrl {
-            let mut parser = SwrlParser::new();
-            parser.set_default_prefix(&self.config.default_prefix);
-            let rule = parser
-                .parse(rule_text)
-                .map_err(|e| ReasonerError::SwrlParse(e.to_string()))?;
-            swrl_rules.push(rule);
-        }
-
-        // ═══════════════════════════════════════════════════════
-        // Step 3: 逐层处理 — BFS 遍历
-        // ═══════════════════════════════════════════════════════
-        let mut code_map: HashMap<String, String> = HashMap::new(); // old_code → new_code
-        let mut all_cloned: HashSet<String> = HashSet::new();
-        let mut visited: HashSet<String> = HashSet::new();
-
-        // BFS 队列：每层一组实体
-        let mut queue: VecDeque<Vec<String>> = VecDeque::new();
-        queue.push_back(seed_codes.clone());
-
-        let mut depth = 0usize;
-        let max_depth = request.max_iterations.clamp(1, 10);
-
-        while let Some(layer_codes) = queue.pop_front() {
-            if layer_codes.is_empty() || depth >= max_depth {
-                depth += 1;
-                continue;
-            }
-
-            log::info!(
-                "reason_on_nodes: 第 {} 层 — {} 个本体待处理",
-                depth,
-                layer_codes.len()
-            );
-
-            let mut next_layer: Vec<String> = Vec::new();
-
-            for code in &layer_codes {
-                if visited.contains(code) {
-                    continue;
-                }
-                visited.insert(code.clone());
-
-                // ── 3a. 获取原实体 + 全部关系 ──
-                let original_entity = match find_entity_any(self.repo.as_ref(), code) {
-                    Some(n) => n,
-                    None => {
-                        log::warn!("实体 '{}' 未找到，跳过", code);
-                        continue;
-                    }
-                };
-                let entity_code = original_entity
-                    .property("code")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(code)
-                    .to_string();
-
-                let all_rels = util::get_all_relationships(self.repo.as_ref(), &entity_code);
-
-                if self.config.verbose {
-                    log::info!("  本体 '{}': {} 个关系", entity_code, all_rels.len());
-                }
-
-                // ── 3b. 属性继承展开（OWL2/RDFS 优先）──
-                let enriched =
-                    util::inherit_entity_properties(self.repo.as_ref(), &original_entity);
-                if self.config.verbose {
-                    let orig_count = original_entity.properties.len();
-                    let enriched_count = enriched.properties.len();
-                    if enriched_count > orig_count {
-                        log::info!(
-                            "  本体 '{}': 继承属性 {}+{}→{}",
-                            entity_code,
-                            orig_count,
-                            enriched_count - orig_count,
-                            enriched_count
-                        );
-                    }
-                }
-
-                // ── 3c. 按场景 ID 复制副本本体（含继承后属性）──
-                let new_code = util::ensure_cope_version_with_props(
-                    self.repo.as_ref(),
-                    &entity_code,
-                    &request.cope_version,
-                    &enriched.labels,
-                    &enriched.properties,
-                )
-                .map_err(ReasonerError::SwrlExecution)?;
-
-                code_map.insert(entity_code.clone(), new_code.clone());
-                all_cloned.insert(new_code.clone());
-                report.cloned_count += 1;
-
-                // ── 3d. 对本实体独立推理（行为 + SWRL）──
-                // 行为引擎：解析行为字段，执行 hasEffect
-                let behavior = crate::swrl::behavior::parse_behavior(&original_entity);
-                if !behavior.is_empty() {
-                    let engine = self.swrl_engine.get_or_insert_with(|| {
-                        crate::swrl::engine::SwrlEngine::new(Arc::clone(&self.repo))
-                            .with_max_iterations(self.config.max_iterations)
-                            .with_verbose(self.config.verbose)
-                            .with_policy(self.policy.clone())
-                    });
-
-                    let result = crate::swrl::behavior::execute_behavior(
-                        self.repo.as_ref(),
-                        &behavior,
-                        engine,
-                        5,
-                        0,
-                    );
-
-                    if result.triggered {
-                        log::info!(
-                            "  本体 '{}': 行为触发 — {} 条推导事实",
-                            entity_code,
-                            result.derived_count
-                        );
-                        report.swrl_stats.total_derived += result.derived_count;
-                    } else if let Some(reason) = &result.blocked_reason {
-                        log::debug!("  本体 '{}': 行为阻断 — {}", entity_code, reason);
-                    }
-                }
-
-                // SWRL 规则推理（如果加载了规则）
-                if !swrl_rules.is_empty() {
-                    let mut versioned_engine = SwrlEngine::new(Arc::clone(&self.repo))
-                        .with_max_iterations(self.config.max_iterations)
-                        .with_verbose(self.config.verbose)
-                        .with_policy(self.policy.clone())
-                        .with_cope_version(&request.cope_version);
-
-                    match versioned_engine.execute_rules(&swrl_rules) {
-                        Ok((_results, stats)) => {
-                            report.swrl_stats.total_steps += stats.total_steps;
-                            report.swrl_stats.total_derived += stats.total_derived;
-                            report.swrl_stats.fuse_trips += stats.fuse_trips;
-
-                            if self.config.verbose && stats.total_derived > 0 {
-                                log::info!(
-                                    "  本体 '{}': SWRL 推导 {} 条事实",
-                                    entity_code,
-                                    stats.total_derived
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("  本体 '{}': SWRL 推理失败 — {}", entity_code, e);
-                        }
-                    }
-                }
-
-                // DWL2 查询（owl2: 表达式）
-                for expr_body in &grouped.owl2 {
-                    let expr = match ClassExpression::from_key(expr_body) {
-                        Ok(e) => e,
-                        Err(e) => {
-                            log::warn!("DWL2 表达式解析失败 '{}': {}", expr_body, e);
-                            continue;
-                        }
-                    };
-                    let dwl2 = Dwl2QueryEngine::new(Arc::clone(&self.repo))
-                        .with_cope_version(&request.cope_version);
-                    match dwl2.retrieve_instances(&expr) {
-                        Ok(individuals) => {
-                            report.dwl2_results.push(Dwl2Result {
-                                individuals,
-                                subsumption_holds: None,
-                                elapsed_ms: 0,
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!("DWL2 查询失败: {}", e);
-                        }
-                    }
-                }
-
-                // ── 3e. 沿推理边发现下游本体 → 加入下一层 ──
-                for rel in &all_rels {
-                    // 只沿推理边发现下游（非推理边不触发本体发现）
-                    if !crate::language::is_inference_relation(&rel.rel_type)
-                        && !crate::language::is_ontology_relation(&rel.rel_type)
-                    {
-                        continue;
-                    }
-
-                    let neighbor_id = if rel.start_node_id == entity_code {
-                        &rel.end_node_id
-                    } else {
-                        &rel.start_node_id
-                    };
-
-                    if visited.contains(neighbor_id) || all_cloned.contains(neighbor_id) {
-                        continue;
-                    }
-
-                    // 检查是否是本体对象（需要处理的原实体）
-                    if let Some(neighbor) = find_entity_any(self.repo.as_ref(), neighbor_id) {
-                        let ver = neighbor
-                            .property("cope_version")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if ver.is_empty() {
-                            let ncode = neighbor
-                                .property("code")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or(neighbor_id)
-                                .to_string();
-
-                            if !visited.contains(&ncode) {
-                                log::debug!(
-                                    "  本体 '{}' 发现下游: '{}' (via {})",
-                                    entity_code,
-                                    ncode,
-                                    rel.rel_type
-                                );
-                                next_layer.push(ncode);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 下一层入队
-            if !next_layer.is_empty() && depth + 1 < max_depth {
-                queue.push_back(next_layer);
-            }
-
-            depth += 1;
-            report.iterations = depth;
-        }
-
-        // ═══════════════════════════════════════════════════════
-        // Step 4: 本体全部就绪 → 复制副本间的关系
-        // ═══════════════════════════════════════════════════════
-        let mut rels_copied = 0usize;
-        for (old_code, new_code) in &code_map {
-            let out_rels = self
-                .repo
-                .get_relationships(old_code, None)
-                .unwrap_or_default();
-            for r in &out_rels {
-                if let Some(new_tgt) = code_map.get(&r.end_node_id) {
-                    let new_rel = ontology_storage::mapper::graph::relationship::Relationship {
-                        rel_type: r.rel_type.clone(),
-                        start_node_id: new_code.clone(),
-                        end_node_id: new_tgt.clone(),
-                        properties: r.properties.clone(),
-                    };
-                    let _ = self.repo.insert_relationship(&new_rel);
-                    rels_copied += 1;
-                }
-            }
-        }
-
-        if self.config.verbose {
-            log::info!("reason_on_nodes: 复制了 {} 条关系到副本空间", rels_copied);
-        }
-
-        // ═══════════════════════════════════════════════════════
-        // Step 5: SHACL 校验（推理后验证合规性）
-        // ═══════════════════════════════════════════════════════
-        if !grouped.shacl.is_empty() && self.config.verbose {
-            log::info!(
-                "reason_on_nodes: {} SHACL 表达式已记录（文本→形状解析待完善）",
-                grouped.shacl.len()
-            );
-            for (i, expr) in grouped.shacl.iter().enumerate() {
-                log::info!("  sh[{}]: {}", i, expr);
-            }
-        }
-
-        // rule: / action: / function: 扩展前缀处理（记录到日志）
-        if self.config.verbose {
-            if !grouped.rule.is_empty() {
-                log::info!(
-                    "reason_on_nodes: {} 条推理方向设定（rule:）",
-                    grouped.rule.len()
-                );
-            }
-            if !grouped.function.is_empty() {
-                log::info!(
-                    "reason_on_nodes: {} 条自定义函数（function:）",
-                    grouped.function.len()
-                );
-            }
-        }
-
-        report.total_ms = start_time.elapsed().as_millis() as u64;
-
-        if self.config.verbose {
-            log::info!(
-                "reason_on_nodes: 完成 — {} 层, {} 个副本, {} 条关系, {} ms",
-                report.iterations,
-                report.cloned_count,
-                rels_copied,
-                report.total_ms
-            );
-        }
-
-        Ok(report)
+        Ok(ReasonOnNodesReport {
+            cope_version: gie_report.cope_version,
+            cloned_count: gie_report.cloned_count,
+            iterations: gie_report.iterations,
+            swrl_stats: gie_report.swrl_stats,
+            confidence_blocks: gie_report.confidence_blocks,
+            total_ms: gie_report.total_ms,
+            narration: gie_report.narration,
+        })
     }
 } // impl Reasoner
 
@@ -695,60 +359,46 @@ impl Reasoner {
 // 按节点推理 — 请求/报告类型
 // ═══════════════════════════════════════════════════════════
 
-/// `reason_on_nodes` 的输入参数。
+/// `reason_on_nodes` 的输入参数 — 对接 GIE 推理机。
 #[derive(Debug, Clone)]
 pub struct ReasonOnNodesRequest {
-    /// 要推理的节点名称/ID 列表
-    pub node_names: Vec<String>,
-    /// 带语言前缀的表达式列表（如 `"swrl:hasEnemy(?x,?y)->alert(?x,?y)"`）
-    pub expressions: Vec<String>,
-    /// 副本版本标识（如 `"v1"`、`"scenario_alpha"`）
+    /// 起始节点的技术主键 `id` 列表。
+    pub node_ids: Vec<String>,
+    /// 初始置信度（0.0~1.0），默认 0.8。
+    /// 在 BFS 传播中：节点有 confidence → 相乘；无 → 不变；
+    /// 低于引擎阈值时停止此分支下游传播。
+    pub confidence: f64,
+    /// 场景副本版本标识（UUID），所有计算在副本上执行。
     pub cope_version: String,
-    /// 最大迭代次数（默认 5）
-    pub max_iterations: usize,
 }
 
 impl Default for ReasonOnNodesRequest {
     fn default() -> Self {
         Self {
-            node_names: Vec::new(),
-            expressions: Vec::new(),
+            node_ids: Vec::new(),
+            confidence: 0.8,
             cope_version: "default".to_string(),
-            max_iterations: 5,
         }
     }
 }
 
-/// `reason_on_nodes` 的返回报告。
+/// `reason_on_nodes` 的返回报告 — 来自 GIE 推理机。
 #[derive(Debug, Clone)]
 pub struct ReasonOnNodesReport {
-    /// 使用的副本版本号
     pub cope_version: String,
-    /// 累计克隆的节点数
     pub cloned_count: usize,
-    /// DWL2 查询结果
-    pub dwl2_results: Vec<Dwl2Result>,
-    /// SWRL 推理统计
-    pub swrl_stats: ExecutionStats,
-    /// SHACL 验证报告
-    pub shacl_reports: Vec<crate::shacl::result::ValidationReport>,
-    /// 实际迭代次数
     pub iterations: usize,
-    /// 总耗时(ms)
+    pub swrl_stats: ExecutionStats,
+    pub confidence_blocks: usize,
     pub total_ms: u64,
+    /// 推理叙述（每行一条说明）
+    pub narration: Vec<String>,
 }
 
 impl ReasonOnNodesReport {
     pub fn new(cope_version: String) -> Self {
-        Self {
-            cope_version,
-            cloned_count: 0,
-            dwl2_results: Vec::new(),
-            swrl_stats: ExecutionStats::default(),
-            shacl_reports: Vec::new(),
-            iterations: 0,
-            total_ms: 0,
-        }
+        Self { cope_version, cloned_count: 0, iterations: 0,
+            swrl_stats: ExecutionStats::default(), confidence_blocks: 0, total_ms: 0, narration: Vec::new() }
     }
 }
 

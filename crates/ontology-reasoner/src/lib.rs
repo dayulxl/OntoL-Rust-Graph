@@ -60,10 +60,10 @@
 pub mod confidence;
 pub mod dwl2;
 pub mod error;
+pub mod gie;
 pub mod graph;
 pub mod language;
 pub mod logger;
-pub mod query_plan;
 pub mod shacl;
 pub mod spatial;
 pub mod swrl;
@@ -84,11 +84,14 @@ pub use language::{
     classify_strings_by_prefix, group_expressions, is_inference_prefix, is_inference_relation,
     is_ontology_relation, parse_language_expression,
 };
-pub use query_plan::{QueryPlan, QueryResult};
+pub use ontology_storage::mapper::query_plan::{AtomPattern, ConstraintSpec, QueryPlan, QueryResult};
 pub use reasoner::{
     ReasonOnNodesReport, ReasonOnNodesRequest, Reasoner, ReasonerBuilder, ReasonerConfig,
     ReasonerReport,
 };
+// GIE types — re-exported for external consumers (e.g. ontology-server)
+pub use gie::context::InferenceContext;
+pub use gie::engine::{InferenceEngine, InferenceReport, InferenceRequest};
 pub use spatial::haversine_m;
 pub use swrl::ast::{Atom, ExecutionStats, InferenceResult, Rule, VariableBinding};
 pub use swrl::behavior::{

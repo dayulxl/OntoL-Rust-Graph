@@ -44,6 +44,7 @@
 ```
                     ┌──────────────┐
                     │  reasoner.rs │  ← 编排层（唯一有权协调所有模块）
+                    │  gie/        │  ← GIE 推理引擎核心（Translator + Version + Engine + Router）
                     └──────┬───────┘
            ┌───────────────┼───────────────────────────┐
            │               │                           │
@@ -408,6 +409,21 @@ ontology-reasoner/src/
 ├── query_plan.rs          # ⚠ QueryPlan 抽象 (迁移中)
 ├── language.rs            # ✅ 语言前缀解析 (6 种前缀: owl2:/swrl:/sh:/rule:/action:/func:)
 ├── logger.rs              #   日志初始化
+├── gie/                   # ✅ 通用推理引擎 (v0.4)
+│   ├── mod.rs             #   模块入口 + 架构分层图 (GIE in L2)
+│   ├── context.rs         #   InferenceContext — 推理状态传递
+│   ├── engine/
+│   │   ├── mod.rs         #   InferenceEngine — 推理总入口 (Confidence + VersionControl)
+│   │   └── fixpoint.rs    #   FixpointLoop — 不动点迭代循环
+│   ├── version.rs         #   VersionControl — cope_version + 快照/回滚/清理
+│   ├── translator/
+│   │   ├── mod.rs         #   模块声明
+│   │   ├── swrl.rs        #   SWRL → QueryPlan 翻译
+│   │   ├── dwl2.rs        #   DWL2 → QueryPlan 翻译
+│   │   └── jsonpath.rs    #   JSONPath RFC 9535 → QueryPlan 翻译
+│   └── action/
+│       ├── mod.rs         #   模块声明
+│       └── router.rs      #   语言前缀 → 执行引擎路由
 ├── dwl2/
 │   ├── mod.rs             #   模块声明
 │   ├── ast.rs             #   12 种 ClassExpression + 模型结构体

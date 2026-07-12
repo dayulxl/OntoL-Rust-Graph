@@ -165,10 +165,8 @@ pub fn find_incoming_relationships(
 ///
 /// `get_relationships` 只返回出向，此函数合并出向和入向关系。
 pub fn get_all_relationships(repo: &dyn GraphRepository, node_id: &str) -> Vec<Relationship> {
-    let mut all = repo.get_relationships(node_id, None).unwrap_or_default();
-    let incoming = find_incoming_relationships(repo, node_id, None);
-    all.extend(incoming);
-    all
+    // get_relationships 现在返回双向边（(n)-[r]-(m)），无需再单独查入向
+    repo.get_relationships(node_id, None).unwrap_or_default()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -290,24 +288,29 @@ pub fn ensure_cope_version_with_props(
 ) -> Result<String, String> {
     let new_code = format!("{}_v{}", original_code, target_version);
 
-    // 副本已存在 → 直接返回
-    if let Ok(Some(_existing)) = repo.get_node(&new_code) {
-        return Ok(new_code);
+    // 副本已存在 → 返回已有副本的原生 ID
+    if let Ok(Some(existing)) = repo.get_node(&new_code) {
+        return Ok(existing.property("_nid")
+            .and_then(|v| v.as_i64())
+            .map(|i| i.to_string())
+            .unwrap_or(new_code));
     }
 
-    // 构造副本节点 — 使用提供的合并后属性
     let mut new_props = merged_props.clone();
-    new_props.insert(
-        "cope_version".to_string(),
-        PropertyValue::from(target_version),
-    );
+    let orig_nid = merged_props
+        .get("_nid")
+        .cloned()
+        .or_else(|| merged_props.get("id").cloned())
+        .unwrap_or_else(|| PropertyValue::from(original_code));
+    new_props.insert("graph_id".to_string(), orig_nid);
+    new_props.remove("id");
+    new_props.insert("cope_version".to_string(), PropertyValue::from(target_version));
     new_props.insert("code".to_string(), PropertyValue::from(new_code.as_str()));
 
     let cloned = Node::new(labels.to_vec(), new_props);
+    // insert_node 返回原生 ID (id(n))
     repo.insert_node(&cloned)
-        .map_err(|e| format!("clone insert '{}': {}", new_code, e))?;
-
-    Ok(new_code)
+        .map_err(|e| format!("clone insert '{}': {}", new_code, e))
 }
 
 /// 对关系列表做分组摘要 — 按关系类型聚合，返回计数和示例目标。
@@ -507,38 +510,37 @@ pub fn prop_as_f64(val: Option<&PropertyValue>) -> Option<f64> {
 /// - 否则，克隆节点：所有属性 + 标签一致，`cope_version` 设为 `target_version`，
 ///   `code` 追加 `_v{target_version}` 后缀
 ///
-/// 关系的复制由调用方（`clone_all_for_version`）统一处理。
-///
-/// 返回副本的新 code。
+/// 返回副本的**原生 ID（id(n)）**。
 pub fn ensure_cope_version(
     repo: &dyn GraphRepository,
     entity: &Node,
     target_version: &str,
 ) -> Result<String, String> {
-    let original_code = entity
-        .property("code")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let original_code = entity.property("code").and_then(|v| v.as_str()).unwrap_or("");
     let new_code = format!("{}_v{}", original_code, target_version);
 
-    // 已经是副本 → 直接返回
-    let current_version = entity
-        .property("cope_version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if original_code.ends_with(&format!("_v{}", target_version))
-        && current_version == target_version
-    {
-        return Ok(original_code.to_string());
+    let current_version = entity.property("cope_version").and_then(|v| v.as_str()).unwrap_or("");
+    if original_code.ends_with(&format!("_v{}", target_version)) && current_version == target_version {
+        // 已在目标版本中，返回自身的原生 ID
+        return Ok(entity.property("_nid").and_then(|v| v.as_i64()).map(|i| i.to_string()).unwrap_or(original_code.to_string()));
     }
 
-    // 副本已存在 → 直接返回（使用 id/code 多级匹配查找）
-    if let Ok(Some(_existing)) = repo.get_node(&new_code) {
-        return Ok(new_code);
+    if let Ok(Some(existing)) = repo.get_node(&new_code) {
+        return Ok(existing.property("_nid").and_then(|v| v.as_i64()).map(|i| i.to_string()).unwrap_or(new_code));
     }
 
-    // 构造副本节点 — 保留原 id（技术主键不变），仅修改 code 和 cope_version
+    // 构造副本节点：
+    // - graph_id 保存原节点的原生内置 ID（_nid），用于追溯
+    // - 移除属性 id，由系统自动生成新的内置 id
+    // - code 追加版本后缀，cope_version 标记版本
     let mut new_props = entity.properties.clone();
+    let native_id = entity
+        .property("_nid")
+        .cloned()
+        .or_else(|| entity.property("id").cloned())
+        .unwrap_or_else(|| PropertyValue::from(original_code));
+    new_props.insert("graph_id".to_string(), native_id);
+    new_props.remove("id"); // 移除属性 id，系统自动生成新内置 id
     new_props.insert(
         "cope_version".to_string(),
         PropertyValue::from(target_version),
@@ -547,9 +549,7 @@ pub fn ensure_cope_version(
 
     let cloned = Node::new(entity.labels.clone(), new_props);
     repo.insert_node(&cloned)
-        .map_err(|e| format!("clone insert '{}': {}", new_code, e))?;
-
-    Ok(new_code)
+        .map_err(|e| format!("clone insert '{}': {}", new_code, e))
 }
 
 /// 克隆图中所有本体对象及其关系到指定版本。
