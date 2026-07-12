@@ -255,6 +255,48 @@ pub const BEHAVIOR_FIELD_KEYS: &[&str] = &[
     COMPOSED_OF_KEY,
 ];
 
+// ── 标准审计字段键 (所有节点/关系表通用) ──
+
+/// `id` — 技术主键 (UUID, TEXT, NOT NULL)
+pub const STD_ID_KEY: &str = "id";
+
+/// `name` — 名称 (TEXT)
+pub const STD_NAME_KEY: &str = "name";
+
+/// `code` — 编码 (TEXT, NOT NULL, 表内唯一)
+pub const STD_CODE_KEY: &str = "code";
+
+/// `create_time` — 记录创建时间 (DateTime, NOT NULL, 自动填充)
+pub const CREATE_TIME_KEY: &str = "create_time";
+
+/// `create_user` — 记录创建人标识 (VARCHAR(64), NOT NULL)
+pub const CREATE_USER_KEY: &str = "create_user";
+
+/// `update_time` — 记录最后更新时间 (DateTime, NOT NULL, 每次更新自动刷新)
+pub const UPDATE_TIME_KEY: &str = "update_time";
+
+/// `update_user` — 记录最后更新人标识 (VARCHAR(64), NOT NULL)
+pub const UPDATE_USER_KEY: &str = "update_user";
+
+/// `delete_flag` — 逻辑删除标志 (INT, NOT NULL, DEFAULT 0: 0=未删除, 1=已删除)
+pub const DELETE_FLAG_KEY: &str = "delete_flag";
+
+/// `is_system` — 系统标记 (TEXT: "0"=自定义, "1"=系统预设不可修改)
+pub const IS_SYSTEM_KEY: &str = "is_system";
+
+/// 所有标准审计字段属性键（遍历用）
+pub const STD_AUDIT_KEYS: &[&str] = &[
+    STD_ID_KEY,
+    STD_NAME_KEY,
+    STD_CODE_KEY,
+    CREATE_TIME_KEY,
+    CREATE_USER_KEY,
+    UPDATE_TIME_KEY,
+    UPDATE_USER_KEY,
+    DELETE_FLAG_KEY,
+    IS_SYSTEM_KEY,
+];
+
 // ── 边属性键 (自定义动作接口, 9 个标准字段) ──
 
 /// `actionType` — 路由标识, 指定执行分支 (如 "inference" 表示走推理机逻辑)
