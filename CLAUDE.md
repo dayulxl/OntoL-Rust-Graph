@@ -448,6 +448,17 @@ let cat    = categorize_property_key("label");     // Some(Annotation)
 - 功能分支命名：`feat/<描述>` / `fix/<描述>` / `refactor/<描述>`
 - 合并前必须通过第 5.3 节提交前检查清单
 
+### 8.2 Git 操作约定（AI 助手约束）
+
+| 用户指令 | AI 行为 |
+|----------|---------|
+| 只说改代码，没提提交 | **只改代码**，不做任何 git 操作 |
+| "提交" / "commit" | 执行 `git add -A && git commit -m '...'` |
+| "push" / "推上去" | **先** `git commit`（含 add），**再** `git push` |
+| "提交代码" | 同"提交"，只 commit 不 push |
+
+> 核心：AI 不主动 commit/push。用户说 push 时，commit 和 push 一起做。
+
 ---
 
 ## 10. 缺陷追踪
