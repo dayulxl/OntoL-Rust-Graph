@@ -667,12 +667,6 @@ impl Reasoner {
                     grouped.rule.len()
                 );
             }
-            if !grouped.action.is_empty() {
-                log::info!(
-                    "reason_on_nodes: {} 条自定义动作（action:）",
-                    grouped.action.len()
-                );
-            }
             if !grouped.function.is_empty() {
                 log::info!(
                     "reason_on_nodes: {} 条自定义函数（function:）",

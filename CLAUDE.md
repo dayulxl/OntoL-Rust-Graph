@@ -211,6 +211,11 @@ RUST_LOG=info
 Memgraph 兼容 Neo4j Bolt 协议，本项目通过 `ontology-storage` 的 `memgraph` feature
 使用 `neo4rs` 驱动，走原生 Bolt 协议连接。
 
+> ⚠️ **核心约束**：Memgraph 边属性仅支持标量类型
+> （String / Int / Float / Bool / DateTime / Duration / Point / List）。
+> **不支持 Map / JSON 嵌套**。
+> 所有复合语义必须通过「扁平化 key-value」或「独立节点 + 关系」表达。
+
 通过 Docker 启动 Memgraph：
 
 ```bash
@@ -659,22 +664,43 @@ fn current_epoch_ms() -> i64 {
 
 ## 13. 推理边/推理属性前缀规范
 
-> **核心原则**：图中关系和属性通过 6 种前缀标记为"推理边/推理属性"。
-> 推理引擎只处理带前缀的边和属性，不带前缀的不处理（仅用于展示和结构遍历）。
+> **核心原则**：
+> 1. 图中关系类型以 6 种前缀开头 → 推理边，走推理引擎处理
+> 2. 不带前缀的关系 → 非推理边，仅展示/结构遍历
+> 3. 边属性（9 个标准字段）控制路由、校验和阻断行为
 
-### 13.1 前缀约定（7 种）
+### 13.1 对象属性 — 关系类型前缀（6 种）
 
-| 序号 | 编码前缀 | 名称 | 格式示例 | 路由目标 | 说明 |
-|------|----------|------|----------|----------|------|
-| 1 | `rdfs:` | RDFS 语言 | `rdfs:subClassOf domain` | 本体语义层 | RDFS 基础类型系统（subClassOf、domain、range 等） |
-| 2 | `owl2:` | OWL2 DL 语言 | `owl2:ObjectIntersectionOf(:Person :Employee)` | DWL2 查询引擎 | OWL2-DL 描述逻辑，类表达式/实例检索（主力） |
-| 3 | `swrl:` | SWRL 语言 | `swrl:Person(?x) ^ hasAge(?x, ?a) -> Adult(?x)` | SWRL 规则推理引擎 | 推理规则表达 |
-| 4 | `sh:` | SHACL 语言 | `sh:property [ sh:path :name; sh:minCount 1 ]` | SHACL 验证引擎 | 数据校验约束 |
-| 5 | `rule:` | 规则设定 | `rule:forwardChain` / `rule:backward` | 推理引擎 | 前链/后链，默认前向链 |
-| 6 | `action:` | 自定义动作 | `action:启动巡逻` | LLM 模糊推理 | 后面写汉字，大模型自主判断执行什么动作 |
-| 7 | `function:` | 自定义函数 | `function:{"id":"图ID","func":"函数名"}` | LLM JSON 调用 | 对接大模型，用 JSON 实现 |
+| 序号 | 作用域 | 编码前缀 | 名称 | 格式示例 | 备注 |
+|------|--------|----------|------|----------|------|
+| 1 | 对象属性 | `rdfs:` | RDFS 语言 | `rdfs:subClassOf domain` | 也支持 RDFS 核心常量，不写前缀 |
+| 2 | 对象属性 | `owl2:` | OWL2 DL 语言 | `owl2:ObjectIntersectionOf(:Person :Employee)` | OWL2 DL 为主 |
+| 3 | 对象属性 | `swrl:` | SWRL 语言 | `swrl:Person(?x) ^ hasAge(?x, ?a) -> Adult(?x)` | SWRL 语法 |
+| 4 | 对象属性 | `sh:` | SHACL 语言 | `sh:property [ sh:path :name; sh:minCount 1 ]` | |
+| 5 | 对象属性 | `rule:` | 规则设定 | `rule:forwardChain` / `rule:backwardChain` | 默认前链推理 |
+| 6 | 对象属性 | `func:` | 自定义动态函数 | `func:{"id":"图ID","func":"函数名"}` | 不对接大模型，用 JSON 调用函数实现 |
 
+> 1-4 是 W3C 标准语义网语言，5-6 是系统自定义的扩展前缀。
 > 此约定与 `crates/ontology-reasoner/src/language.rs` 中的 `LanguagePrefix` 枚举一致。
+
+### 13.1.1 边属性 — 自定义动作接口（9 个标准字段）
+
+任何图关系（边）上可附加以下 9 个属性键，控制路由、校验和阻断行为：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `actionType` | String | **路由标识**：指定执行分支（如 `"inference"` 表示走推理机逻辑） |
+| `required` | String/Bool | **阻断控制**：校验失败时是否强制中断当前业务流程 |
+| `validationType` | String | **规则级别**：`"Strong"` 强校验（阻断）/ `"Weak"` 弱校验（提醒不阻断） |
+| `ruleId` | String | **规则锚点**：指向图数据库中的规则本体节点，用于元数据管理和错误溯源 |
+| `func` | String | **执行指令**：映射底层要调用的具体函数名 |
+| `id` | String | **数据锚点**：当前需要被校验的具体业务数据节点 |
+| `msg` | String | 详细说明作用 |
+| `synonym` | String | 同义词 |
+| `queryVariant` | String | 错意词 |
+
+> 边属性均为标量类型（String 为主），遵循 Memgraph 约束（§6.2）。
+> 复合语义通过扁平化 key-value 表达，不嵌套 JSON。
 
 ### 13.2 关系类型（边标签）前缀规则
 
@@ -684,8 +710,7 @@ fn current_epoch_ms() -> i64 {
   owl2:someValuesFrom  ──→ 推理边，DWL2 引擎处理
   sh:property         ──→ 推理边，SHACL 引擎处理
   rule:forwardChain   ──→ 推理边，推理方向控制
-  action:check        ──→ 推理边，LLM 模糊推理
-  function:calc       ──→ 推理边，LLM JSON 调用
+  func:calc            ──→ 推理边，LLM JSON 调用
   移动                ──→ 非推理边，仅展示/结构遍历，不触发推理
   打击                ──→ 非推理边，同上
 ```
@@ -705,8 +730,7 @@ fn current_epoch_ms() -> i64 {
              └── SWRL 语言表达式，路由到 SWRL 引擎
 
   rule:forwardChain    └── 推理方向设定
-  action:do_something  └── LLM 模糊推理动作
-  function:{"id":"N1","func":"f"}  └── JSON 函数调用
+  func:{"id":"N1","func":"f"}  └── JSON 函数调用
 ```
 
 规则同关系类型：带前缀处理，不带前缀跳过。
@@ -721,8 +745,7 @@ fn current_epoch_ms() -> i64 {
 | `owl2:` | 有效推理边 → DWL2 引擎，body 为空 |
 | `sh:` | 有效推理边 → SHACL 引擎，body 为空 |
 | `rule:` | 有效推理边 → 默认前向链推理 |
-| `action:` | 有效推理边 → 默认 LLM 模糊推理 |
-| `function:` | 有效推理边 → LLM JSON 调用 |
+| `func:` | 有效推理边 → LLM JSON 调用 |
 
 > 实现：`parse_language_expression("swrl:")` 返回 `Ok(ParsedExpression { prefix: Swrl, body: "" })`，
 > 各引擎收到空 body 时跳过执行返回 `Ok(0)`，不中断链路。这是宽容执行原则（§19）的体现。
@@ -779,7 +802,7 @@ pub const ONTOLOGY_SEMANTIC_RELS: &[&str];
 - DWL2/SWRL/SHACL 引擎通过 `unified_mapping` 常量直接引用它们
 
 **领域自定义关系**（如 `hasEnemy`、`移动`、`打击`）：
-- 如果要被推理引擎处理 → 必须带 6 种前缀之一（如 `swrl:hasEnemy`、`action:check`）
+- 如果要被推理引擎处理 → 必须带 6 种前缀之一（如 `swrl:hasEnemy`、`rule:forwardChain`）
 - 如果不带前缀 → 仅作为展示/结构边，不触发推理
 
 ```
@@ -787,7 +810,7 @@ OWL 语义层（隐式推理边，无需前缀）:
   subClassOf, INSTANCE_OF, HAS_PROPERTY, equivalentClass, disjointWith, ...
 
 领域扩展层（必须带前缀才触发推理）:
-  swrl:hasEnemy, owl2:移动, sh:validate, rule:forwardChain, action:check, function:calc
+  swrl:hasEnemy, owl2:移动, sh:validate, rule:forwardChain, func:calc
   移动, 打击, 侦察, ...  ← 不带前缀，仅展示用
 ```
 
@@ -801,8 +824,7 @@ Entity 的 `hasEffect` 字段已使用 6 种语言前缀路由（参见 §6.4）
 | `sh:` | SHACL 验证（仅检查合规性） |
 | `owl2:` | DWL2 查询（仅检查存在性） |
 | `rule:` | 推理方向设定（记录日志） |
-| `action:` | LLM 模糊推理（记录日志） |
-| `function:` | LLM JSON 调用（记录日志） |
+| `func:` | LLM JSON 调用（记录日志） |
 | 无前缀 | 默认尝试 SWRL 解析 |
 
 `hasPrecondition` 字段使用 SHACL 语法但不要求 `sh:` 前缀（因为前置条件语义已由字段名 `hasPrecondition` 确定）。
@@ -827,23 +849,34 @@ Entity 的 `hasEffect` 字段已使用 6 种语言前缀路由（参见 §6.4）
 推理引擎将所有关系分为两层，**本体语义层始终优先处理**：
 
 ```
-第 1 层 — 本体语义层 (OWL2/RDFS), 最先处理:
-  ├─ unified_mapping 核心 OWL/RDFS 常量 (subClassOf, INSTANCE_OF, HAS_PROPERTY, ...)
-  ├─ owl2: 前缀的关系
-  └─ 用途: 属性继承、类层次解析、实例归属判断
-
-第 2 层 — 推理执行层, 本体就绪后处理:
-  ├─ swrl: / sh: / rule: / action: / function: 前缀的关系
-  └─ 用途: 规则推理、约束验证、LLM 集成
+┌──────────────────────────────────────────────────────────┐
+│ 第 1 层 — 本体语义层 (最先处理)                            │
+│   1. rdfs: ─ RDFS 基础类型系统 (domain、range 等)         │
+│   2. owl2: ─ OWL2 DL 本体语义 (主力)                      │
+│         + ONTOLOGY_SEMANTIC_RELS (15 个核心常量):          │
+│           subClassOf、INSTANCE_OF、HAS_PROPERTY、          │
+│           equivalentClass、disjointWith、sameAs、          │
+│           differentFrom、inverseOf、complementOf、         │
+│           intersectionOf、unionOf、oneOf、                 │
+│           subPropertyOf、HAS_RANGE、HAS_VALUE              │
+│   用途: 属性继承、类层次解析、实例归属判断                  │
+├──────────────────────────────────────────────────────────┤
+│ 第 2 层 — 推理执行层 (本体就绪后)                          │
+│   3. swrl:     ─ 推理规则表达                             │
+│   4. sh:       ─ 数据校验约束                             │
+│   5. rule:     ─ 前链/后链推理方向                         │
+│   6. func:     ─ LLM JSON 调用                            │
+│   用途: 规则执行、约束验证、LLM 集成                       │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **判断函数**：
 
 ```rust
-/// 本体语义层: owl2: 前缀 + ONTOLOGY_SEMANTIC_RELS 核心常量
+/// 本体语义层: rdfs:/owl2: 前缀 + ONTOLOGY_SEMANTIC_RELS 核心常量
 pub fn is_ontology_relation(rel_type: &str) -> bool;
 
-/// 推理层: 全部 6 种前缀 (owl2:/swrl:/sh:/rule:/action:/function:)
+/// 推理层: 全部 6 种前缀 (rdfs:/owl2:/swrl:/sh:/rule:/func:)
 pub fn is_inference_relation(rel_type: &str) -> bool;
 ```
 

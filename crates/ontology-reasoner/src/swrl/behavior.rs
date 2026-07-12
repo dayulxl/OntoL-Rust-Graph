@@ -466,11 +466,6 @@ pub fn execute_effect(
                     log::info!("hasEffect 推理方向设定: '{}'", pe.body);
                     Ok(0)
                 }
-                LanguagePrefix::Action => {
-                    // 自定义动作 — 对接大模型模糊推理
-                    log::info!("hasEffect 自定义动作 (LLM 模糊推理): '{}'", pe.body);
-                    Ok(0)
-                }
                 LanguagePrefix::Function => {
                     // 自定义函数 — JSON 格式 LLM 调用
                     log::info!("hasEffect 自定义函数 (LLM JSON 调用): '{}'", pe.body);

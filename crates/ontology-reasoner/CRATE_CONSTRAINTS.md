@@ -25,7 +25,7 @@
 | 3 | `sh:` | SHACL 语言 | 形状约束语言，用于图节点验证 |
 | 4 | `rule:` | 规则设定 | 推理链方向控制（`forwardChain` / `backward`，默认前向） |
 | 5 | `action:` | 自定义动作接口 | 对接大模型模糊推理，无内容时默认 `action:` |
-| 6 | `function:` | 自定义函数 | JSON 格式 `{"id":"图ID","func":"函数名"}`，对接大模型 |
+| 6 | `func:` | 自定义函数 | JSON 格式 `{"id":"图ID","func":"函数名"}`，对接大模型 |
 
 **示例**：
 - `owl2:ObjectIntersectionOf(:Person :Employee)` — DWL2 类表达式
@@ -33,7 +33,7 @@
 - `sh:property [ sh:path :name; sh:minCount 1 ]` — SHACL 形状约束
 - `rule:forwardChain` — 前向链推理
 - `action:validate_entity` — 自定义动作，LLM 模糊推理
-- `function:{"id":"N1","func":"calc"}` — 自定义函数，JSON 格式
+- `func:{"id":"N1","func":"calc"}` — 自定义函数，JSON 格式
 
 ---
 
@@ -69,7 +69,7 @@
     │               └──────────────────────┘                │
     │                                                       │
     │  ┌──────────────┐                                     │
-    │  │ language/     │  ← 语言前缀解析（6 种前缀: owl2:/swrl:/sh:/rule:/action:/function:） │
+    │  │ language/     │  ← 语言前缀解析（6 种前缀: owl2:/swrl:/sh:/rule:/action:/func:） │
     │  │ 零依赖        │     reasoner.rs 路由表达式的依据     │
     │  └──────────────┘                                     │
     └──────────────────────────────────────────────────────┘
@@ -88,7 +88,7 @@
 | **REASONER-007** | 所有模块禁止直接构造 `GraphPattern`/`Node`/`Relationship`（应通过 `unified_mapping` 常量 + `GraphRepository` trait 方法操作） |
 | **REASONER-008** | 所有模块的图操作必须使用 `ontology_storage::mapper::unified_mapping` 中定义的词汇表常量，**禁止硬编码字符串**（如 `"Entity"`、`"INSTANCE_OF"`） |
 | **REASONER-009** | SWRL / DWL2 / SHACL 引擎须支持 `cope_version` 过滤（通过 `with_cope_version()` 构建器）。设置为 `Some` 时只操作匹配版本的副本节点，`None` 时不过滤（向后兼容全局图） |
-| **REASONER-010** | 语言前缀路由在 `reasoner.rs` 中完成：`owl2:` → DWL2、`swrl:` → SWRL、`sh:` → SHACL、`rule:` → 推理方向、`action:` → LLM 模糊推理、`function:` → LLM JSON 调用。前缀解析由 `language.rs` 模块提供，引擎本身不感知前缀 |
+| **REASONER-010** | 语言前缀路由在 `reasoner.rs` 中完成：`owl2:` → DWL2、`swrl:` → SWRL、`sh:` → SHACL、`rule:` → 推理方向、`action:` → LLM 模糊推理、`func:` → LLM JSON 调用。前缀解析由 `language.rs` 模块提供，引擎本身不感知前缀 |
 
 ---
 
@@ -406,7 +406,7 @@ ontology-reasoner/src/
 ├── reasoner.rs            # ✅ Reasoner 编排层 (含 reason_on_nodes)
 ├── error.rs               # ✅ ReasonerError 统一错误
 ├── query_plan.rs          # ⚠ QueryPlan 抽象 (迁移中)
-├── language.rs            # ✅ 语言前缀解析 (6 种前缀: owl2:/swrl:/sh:/rule:/action:/function:)
+├── language.rs            # ✅ 语言前缀解析 (6 种前缀: owl2:/swrl:/sh:/rule:/action:/func:)
 ├── logger.rs              #   日志初始化
 ├── dwl2/
 │   ├── mod.rs             #   模块声明

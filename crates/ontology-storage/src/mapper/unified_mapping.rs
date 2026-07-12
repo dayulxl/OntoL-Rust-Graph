@@ -25,7 +25,7 @@
 //! sh:validate      → 推理边，SHACL 引擎处理
 //! rule:forwardChain → 推理边，推理方向控制
 //! action:check     → 推理边，LLM 模糊推理
-//! function:calc    → 推理边，LLM JSON 调用
+//! func:calc       → 推理边，LLM JSON 调用
 //! 移动             → 非推理边，仅展示/结构遍历
 //! ```
 //!
@@ -253,6 +253,48 @@ pub const BEHAVIOR_FIELD_KEYS: &[&str] = &[
     HAS_DURATION_KEY,
     HAS_PRIORITY_KEY,
     COMPOSED_OF_KEY,
+];
+
+// ── 边属性键 (自定义动作接口, 9 个标准字段) ──
+
+/// `actionType` — 路由标识, 指定执行分支 (如 "inference" 表示走推理机逻辑)
+pub const ACTION_TYPE_KEY: &str = "actionType";
+
+/// `required` — 阻断控制, 校验失败时是否强制中断当前业务流程
+pub const REQUIRED_KEY: &str = "required";
+
+/// `validationType` — 规则级别: "Strong"(强校验/阻断) / "Weak"(弱校验/提醒不阻断)
+pub const VALIDATION_TYPE_KEY: &str = "validationType";
+
+/// `ruleId` — 规则锚点, 指向图数据库中的规则本体节点
+pub const RULE_ID_KEY: &str = "ruleId";
+
+/// `func` — 执行指令, 映射底层要调用的具体函数名
+pub const FUNC_KEY: &str = "func";
+
+/// `id` — 数据锚点, 当前需要被校验的具体业务数据节点
+pub const FIELD_ID_KEY: &str = "id";
+
+/// `msg` — 详细说明作用
+pub const MSG_KEY: &str = "msg";
+
+/// `synonym` — 同义词
+pub const SYNONYM_KEY: &str = "synonym";
+
+/// `queryVariant` — 错意词
+pub const QUERY_VARIANT_KEY: &str = "queryVariant";
+
+/// 所有边属性键（遍历用）
+pub const EDGE_ACTION_KEYS: &[&str] = &[
+    ACTION_TYPE_KEY,
+    REQUIRED_KEY,
+    VALIDATION_TYPE_KEY,
+    RULE_ID_KEY,
+    FUNC_KEY,
+    FIELD_ID_KEY,
+    MSG_KEY,
+    SYNONYM_KEY,
+    QUERY_VARIANT_KEY,
 ];
 
 // ── 预组合切片 ──

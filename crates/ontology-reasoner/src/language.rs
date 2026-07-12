@@ -3,7 +3,7 @@
 //! 本 crate 中的规则、查询、约束使用统一前缀来区分不同的本体语言和推理指令。
 //! 此模块提供前缀检测和表达式剥离功能。
 //!
-//! ## 前缀约定
+//! ## 前缀约定（6 种）
 //!
 //! | 序号 | 前缀 | 语言/类别 | 路由目标 | 说明 |
 //! |------|------|----------|----------|------|
@@ -12,8 +12,9 @@
 //! | 3 | `swrl:` | SWRL 语言 | SWRL 规则推理引擎 | 推理规则表达 |
 //! | 4 | `sh:` | SHACL 语言 | SHACL 验证引擎 | 数据校验约束 |
 //! | 5 | `rule:` | 规则设定 | 推理引擎 | forwardChain（前链）/ backwardChain（后链），默认前链 |
-//! | 6 | `action:` | 自定义动作 | LLM 模糊推理 | 后面写汉字，大模型自主判断执行什么动作 |
-//! | 7 | `function:` | 自定义函数 | LLM JSON 调用 | JSON 格式 `{"id":"图ID","func":"函数名"}` |
+//! | 6 | `func:` | 自定义动态函数 | 函数调用 | JSON 格式 `{"id":"图ID","func":"函数名"}`，不对接大模型 |
+//!
+//! > 1-4 是 W3C 标准语义网语言，5-6 是系统自定义的扩展前缀。
 //!
 //! ## 示例
 //!
@@ -27,7 +28,7 @@
 
 use std::collections::HashMap;
 
-/// 本体语言前缀枚举（7 种）。
+/// 本体语言前缀枚举（6 种）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LanguagePrefix {
     /// `rdfs:` — RDFS 基础类型系统，用于 subClassOf/domain/range 等
@@ -38,25 +39,15 @@ pub enum LanguagePrefix {
     Swrl,
     /// `sh:` — 形状约束语言，用于 SHACL 图验证
     Shacl,
-    /// `rule:` — 推理链方向控制（`forwardChain` / `backward`，默认前向）
+    /// `rule:` — 推理链方向控制（`forwardChain` / `backwardChain`，默认前向）
     Rule,
-    /// `action:` — 自定义动作，对接大模型模糊推理
-    Action,
-    /// `function:` — 自定义函数，JSON 格式 `{"id":"图ID","func":"函数名"}`
+    /// `func:` — 自定义函数，JSON 格式 `{"id":"图ID","func":"函数名"}`
     Function,
 }
 
 impl LanguagePrefix {
     /// 所有推理前缀的字符串切片，用于批量匹配
-    pub const ALL_PREFIXES: &[&str] = &[
-        "rdfs:",
-        "owl2:",
-        "swrl:",
-        "sh:",
-        "rule:",
-        "action:",
-        "function:",
-    ];
+    pub const ALL_PREFIXES: &[&str] = &["rdfs:", "owl2:", "swrl:", "sh:", "rule:", "func:"];
 
     /// 根据前缀字符串返回对应的 `LanguagePrefix`（不要求 body 非空）
     fn from_prefix_str(s: &str) -> Option<LanguagePrefix> {
@@ -66,8 +57,7 @@ impl LanguagePrefix {
             "swrl:" => Some(LanguagePrefix::Swrl),
             "sh:" => Some(LanguagePrefix::Shacl),
             "rule:" => Some(LanguagePrefix::Rule),
-            "action:" => Some(LanguagePrefix::Action),
-            "function:" => Some(LanguagePrefix::Function),
+            "func:" => Some(LanguagePrefix::Function),
             _ => None,
         }
     }
@@ -81,8 +71,7 @@ impl std::fmt::Display for LanguagePrefix {
             Self::Swrl => write!(f, "swrl"),
             Self::Shacl => write!(f, "sh"),
             Self::Rule => write!(f, "rule"),
-            Self::Action => write!(f, "action"),
-            Self::Function => write!(f, "function"),
+            Self::Function => write!(f, "func"),
         }
     }
 }
@@ -98,14 +87,13 @@ pub struct ParsedExpression {
 
 /// 将完整的表达式字符串解析为 `ParsedExpression`。
 ///
-/// 支持七种前缀（大小写敏感）：
+/// 支持 6 种前缀（大小写敏感）：
 /// - `rdfs:` → RDFS 基础类型系统
 /// - `owl2:` → OWL2-DL 类表达式
 /// - `swrl:` → SWRL 规则
 /// - `sh:`  → SHACL 形状约束
 /// - `rule:` → 推理链方向
-/// - `action:` → 自定义动作（LLM 模糊推理）
-/// - `function:` → 自定义函数（JSON 格式）
+/// - `func:` → 自定义函数（JSON 格式）
 ///
 /// 前缀后内容为空时返回空 body（宽容模式：仅前缀标记也视为有效推理表达式）。
 ///
@@ -128,7 +116,7 @@ pub fn parse_language_expression(input: &str) -> Result<ParsedExpression, String
     }
 
     Err(format!(
-        "不支持的表达式前缀。期望 `rdfs:`、`owl2:`、`swrl:`、`sh:`、`rule:`、`action:` 或 `function:`，收到: {}",
+        "不支持的表达式前缀。期望 `rdfs:`、`owl2:`、`swrl:`、`sh:`、`rule:` 或 `func:`，收到: {}",
         truncate_for_error(input)
     ))
 }
@@ -146,9 +134,7 @@ pub struct GroupedExpressions {
     pub shacl: Vec<String>,
     /// `rule:` 前缀的表达式体
     pub rule: Vec<String>,
-    /// `action:` 前缀的表达式体
-    pub action: Vec<String>,
-    /// `function:` 前缀的表达式体
+    /// `func:` 前缀的表达式体
     pub function: Vec<String>,
 }
 
@@ -164,7 +150,6 @@ pub fn group_expressions(expressions: &[String]) -> Result<GroupedExpressions, S
             LanguagePrefix::Swrl => grouped.swrl.push(parsed.body),
             LanguagePrefix::Shacl => grouped.shacl.push(parsed.body),
             LanguagePrefix::Rule => grouped.rule.push(parsed.body),
-            LanguagePrefix::Action => grouped.action.push(parsed.body),
             LanguagePrefix::Function => grouped.function.push(parsed.body),
         }
     }
@@ -199,7 +184,7 @@ pub fn is_ontology_relation(rel_type: &str) -> bool {
 
 /// 检查字符串是否以推理语言前缀开头。
 ///
-/// 覆盖全部七种前缀：`rdfs:` / `owl2:` / `swrl:` / `sh:` / `rule:` / `action:` / `function:`。
+/// 覆盖全部 6 种前缀：`rdfs:` / `owl2:` / `swrl:` / `sh:` / `rule:` / `func:`。
 /// 用于判断图中的关系类型或属性键/值是否应被推理引擎处理。
 /// 仅前缀无内容（如 `"swrl:"`）也返回 `true`。
 pub fn is_inference_prefix(s: &str) -> bool {
@@ -222,7 +207,7 @@ pub fn is_inference_relation(rel_type: &str) -> bool {
 ///
 /// ```rust,ignore
 /// assert_eq!(classify_inference_prefix("swrl:hasEnemy"), Some(LanguagePrefix::Swrl));
-/// assert_eq!(classify_inference_prefix("action:"), Some(LanguagePrefix::Action));
+/// assert_eq!(classify_inference_prefix("func:calc"), Some(LanguagePrefix::Function));
 /// assert_eq!(classify_inference_prefix("移动"), None);
 /// ```
 pub fn classify_inference_prefix(s: &str) -> Option<LanguagePrefix> {
@@ -266,7 +251,7 @@ fn truncate_for_error(s: &str) -> String {
 mod tests {
     use super::*;
 
-    // ── rdfs: 解析 ──
+    // ── 6 前缀解析 ──
 
     #[test]
     fn test_parse_rdfs() {
@@ -274,8 +259,6 @@ mod tests {
         assert_eq!(parsed.prefix, LanguagePrefix::Rdfs);
         assert_eq!(parsed.body, "subClassOf domain");
     }
-
-    // ── 原有 3 前缀解析 ──
 
     #[test]
     fn test_parse_owl2() {
@@ -301,8 +284,6 @@ mod tests {
         assert_eq!(parsed.body, "property [ sh:path :name; sh:minCount 1 ]");
     }
 
-    // ── 新增 3 前缀解析 ──
-
     #[test]
     fn test_parse_rule_forward() {
         let parsed = parse_language_expression("rule:forwardChain").unwrap();
@@ -312,22 +293,15 @@ mod tests {
 
     #[test]
     fn test_parse_rule_backward() {
-        let parsed = parse_language_expression("rule:backward").unwrap();
+        let parsed = parse_language_expression("rule:backwardChain").unwrap();
         assert_eq!(parsed.prefix, LanguagePrefix::Rule);
-        assert_eq!(parsed.body, "backward");
+        assert_eq!(parsed.body, "backwardChain");
     }
 
     #[test]
-    fn test_parse_action() {
-        let parsed = parse_language_expression("action:validate_patrol").unwrap();
-        assert_eq!(parsed.prefix, LanguagePrefix::Action);
-        assert_eq!(parsed.body, "validate_patrol");
-    }
-
-    #[test]
-    fn test_parse_function() {
+    fn test_parse_func() {
         let parsed =
-            parse_language_expression(r#"function:{"id":"P8A_001","func":"calculate_threat"}"#)
+            parse_language_expression(r#"func:{"id":"P8A_001","func":"calculate_threat"}"#)
                 .unwrap();
         assert_eq!(parsed.prefix, LanguagePrefix::Function);
         assert_eq!(parsed.body, r#"{"id":"P8A_001","func":"calculate_threat"}"#);
@@ -342,20 +316,12 @@ mod tests {
     fn test_unknown_prefix() {
         assert!(parse_language_expression("rdf:something").is_err());
         assert!(parse_language_expression("xml:data").is_err());
+        assert!(parse_language_expression("action:do").is_err());
     }
 
     #[test]
     fn test_empty_body() {
-        // 空 body 是合法的——仅前缀也视为有效推理表达式
-        for prefix in &[
-            "rdfs:",
-            "owl2:",
-            "swrl:",
-            "sh:",
-            "rule:",
-            "action:",
-            "function:",
-        ] {
+        for prefix in &["rdfs:", "owl2:", "swrl:", "sh:", "rule:", "func:"] {
             let parsed = parse_language_expression(prefix).unwrap();
             assert_eq!(parsed.body, "");
         }
@@ -370,22 +336,12 @@ mod tests {
         assert!(is_inference_prefix("swrl:hasEnemy(?x,?y)"));
         assert!(is_inference_prefix("sh:MinCount 1"));
         assert!(is_inference_prefix("rule:forwardChain"));
-        assert!(is_inference_prefix("action:do_something"));
-        assert!(is_inference_prefix("function:calculate"));
-        // 仅前缀无内容
-        for prefix in &[
-            "rdfs:",
-            "swrl:",
-            "owl2:",
-            "sh:",
-            "rule:",
-            "action:",
-            "function:",
-        ] {
+        assert!(is_inference_prefix("func:calculate"));
+        for prefix in &["rdfs:", "owl2:", "swrl:", "sh:", "rule:", "func:"] {
             assert!(is_inference_prefix(prefix));
         }
         assert!(!is_inference_prefix("移动"));
-        assert!(!is_inference_prefix("subClassOf"));
+        assert!(!is_inference_prefix("action:do"));
         assert!(!is_inference_prefix(""));
     }
 
@@ -396,9 +352,9 @@ mod tests {
         assert!(is_inference_relation("owl2:someValuesFrom"));
         assert!(is_inference_relation("sh:property"));
         assert!(is_inference_relation("rule:forwardChain"));
-        assert!(is_inference_relation("action:"));
-        assert!(is_inference_relation("function:calc"));
+        assert!(is_inference_relation("func:calc"));
         assert!(!is_inference_relation("移动"));
+        assert!(!is_inference_relation("action:"));
         assert!(!is_inference_relation("INSTANCE_OF"));
     }
 
@@ -425,11 +381,7 @@ mod tests {
             Some(LanguagePrefix::Rule)
         );
         assert_eq!(
-            classify_inference_prefix("action:do"),
-            Some(LanguagePrefix::Action)
-        );
-        assert_eq!(
-            classify_inference_prefix("function:f"),
+            classify_inference_prefix("func:f"),
             Some(LanguagePrefix::Function)
         );
         assert_eq!(
@@ -437,14 +389,11 @@ mod tests {
             Some(LanguagePrefix::Rdfs)
         );
         assert_eq!(
-            classify_inference_prefix("owl2:"),
-            Some(LanguagePrefix::Owl2)
-        );
-        assert_eq!(
-            classify_inference_prefix("swrl:"),
-            Some(LanguagePrefix::Swrl)
+            classify_inference_prefix("func:"),
+            Some(LanguagePrefix::Function)
         );
         assert_eq!(classify_inference_prefix("移动"), None);
+        assert_eq!(classify_inference_prefix("action:"), None);
         assert_eq!(classify_inference_prefix(""), None);
     }
 
@@ -458,8 +407,7 @@ mod tests {
             "swrl:Person(?x) -> Adult(?x)".to_string(),
             "sh:MinCount 1".to_string(),
             "rule:forwardChain".to_string(),
-            "action:check".to_string(),
-            r#"function:{"id":"N1","func":"f"}"#.to_string(),
+            r#"func:{"id":"N1","func":"f"}"#.to_string(),
         ];
         let grouped = group_expressions(&exprs).unwrap();
         assert_eq!(grouped.rdfs, vec!["subClassOf domain"]);
@@ -467,7 +415,6 @@ mod tests {
         assert_eq!(grouped.swrl, vec!["Person(?x) -> Adult(?x)"]);
         assert_eq!(grouped.shacl, vec!["MinCount 1"]);
         assert_eq!(grouped.rule, vec!["forwardChain"]);
-        assert_eq!(grouped.action, vec!["check"]);
         assert_eq!(grouped.function, vec![r#"{"id":"N1","func":"f"}"#]);
     }
 
@@ -484,7 +431,7 @@ mod tests {
             "action:do".into(),
             "打击".into(),
             "rule:forward".into(),
-            "function:calc".into(),
+            "func:calc".into(),
         ];
         let map = classify_strings_by_prefix(&strings);
         assert_eq!(map.get(&LanguagePrefix::Rdfs).unwrap().len(), 1);
@@ -492,8 +439,8 @@ mod tests {
         assert_eq!(map.get(&LanguagePrefix::Owl2).unwrap().len(), 1);
         assert_eq!(map.get(&LanguagePrefix::Shacl).unwrap().len(), 1);
         assert_eq!(map.get(&LanguagePrefix::Rule).unwrap().len(), 1);
-        assert_eq!(map.get(&LanguagePrefix::Action).unwrap().len(), 1);
         assert_eq!(map.get(&LanguagePrefix::Function).unwrap().len(), 1);
+        assert!(map.get(&LanguagePrefix::Rdfs).unwrap().len() == 1);
     }
 
     // ── Display ──
@@ -505,12 +452,11 @@ mod tests {
         assert_eq!(LanguagePrefix::Swrl.to_string(), "swrl");
         assert_eq!(LanguagePrefix::Shacl.to_string(), "sh");
         assert_eq!(LanguagePrefix::Rule.to_string(), "rule");
-        assert_eq!(LanguagePrefix::Action.to_string(), "action");
-        assert_eq!(LanguagePrefix::Function.to_string(), "function");
+        assert_eq!(LanguagePrefix::Function.to_string(), "func");
     }
 
     #[test]
     fn test_all_prefixes_count() {
-        assert_eq!(LanguagePrefix::ALL_PREFIXES.len(), 7);
+        assert_eq!(LanguagePrefix::ALL_PREFIXES.len(), 6);
     }
 }
