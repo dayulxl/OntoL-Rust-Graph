@@ -100,6 +100,9 @@ ontologica_rust_graph/
 - 错误处理：使用 `anyhow`（应用层）/ `thiserror`（库层），禁止裸 `unwrap()` 在非测试代码中出现
 - 所有 `pub` 项必须有文档注释（`///`）
 - 模块文件使用 `mod.rs` 而非同目录同名文件
+- **编码前**：通读目标文件全部代码 + 所有关联函数/调用方的源码，确认没有遗漏再动手
+- **编码后**：从头读一遍完整文件，`grep` 检查所有引用点，`cargo check` 确认零遗漏
+- **冲突提醒**：如果新增/修改的代码与已有逻辑存在冲突，必须在写代码前或写完代码后立即指出。**禁止擅自写补偿代码绕过去**，由用户决定如何处理
 
 ### 4.2 命名约定
 
@@ -424,7 +427,52 @@ SWRL 规则执行分为两阶段：
 | 节点标签 | `get_nodes_by_label()` | `ENTITY_LABEL`, `CLASS_LABEL`, `INDIVIDUAL_LABEL` |
 | 关系类型 | `get_relationships()`, `Relationship::simple()` | `INSTANCE_OF_REL`, `SUB_CLASS_OF_REL`, `HAS_PROPERTY_REL` |
 | 属性键 | `node.property()` | `IRI_KEY`, `LABEL_KEY`, `COMMENT_KEY` |
-| 预组合切片 | 循环遍历 | `DOMAIN_LABELS`, `OWL_NODE_LABELS` |
+| 预组合切片 | 循环遍历 | `DOMAIN_LABELS`, `OWL_NODE_LABELS`, `ONTOLOGY_SEMANTIC_RELS` |
+| 标准审计字段 | 所有节点/关系通用 | `STD_ID_KEY`, `STD_CODE_KEY`, `CREATE_TIME_KEY`, `DELETE_FLAG_KEY`, `IS_SYSTEM_KEY` 等 9 个 |
+| 边属性字段 | 自定义动作接口 | `ACTION_TYPE_KEY`, `REQUIRED_KEY`, `VALIDATION_TYPE_KEY`, `RULE_ID_KEY`, `FUNC_KEY` 等 9 个 |
+
+### 8.1.1 标准审计字段（STD_AUDIT_KEYS, 9 个）
+
+所有节点和关系表的通用审计字段，定义在 `unified_mapping.rs`：
+
+| 常量 | 字段名 | 类型 | 约束 | 说明 |
+|------|--------|------|------|------|
+| `STD_ID_KEY` | `id` | TEXT | PRIMARY KEY, NOT NULL | UUID 技术主键 |
+| `STD_NAME_KEY` | `name` | TEXT | — | 名称 |
+| `STD_CODE_KEY` | `code` | TEXT | NOT NULL, 表内唯一 | 编码 |
+| `CREATE_TIME_KEY` | `create_time` | DateTime | NOT NULL, 自动填充 | 记录创建时间 |
+| `CREATE_USER_KEY` | `create_user` | VARCHAR(64) | NOT NULL | 记录创建人标识 |
+| `UPDATE_TIME_KEY` | `update_time` | DateTime | NOT NULL, 每次更新自动刷新 | 记录最后更新时间 |
+| `UPDATE_USER_KEY` | `update_user` | VARCHAR(64) | NOT NULL | 记录最后更新人标识 |
+| `DELETE_FLAG_KEY` | `delete_flag` | INT | NOT NULL, DEFAULT 0 | 0=未删除, 1=已删除 |
+| `IS_SYSTEM_KEY` | `is_system` | TEXT | — | "0"=自定义, "1"=系统预设不可修改 |
+
+### 8.1.2 边属性 — 自定义动作接口（EDGE_ACTION_KEYS, 9 个）
+
+| 常量 | 字段名 | 说明 |
+|------|--------|------|
+| `ACTION_TYPE_KEY` | `actionType` | 路由标识，如 `"inference"` 走推理机 |
+| `REQUIRED_KEY` | `required` | 阻断控制，校验失败时是否中断 |
+| `VALIDATION_TYPE_KEY` | `validationType` | `"Strong"` 强校验阻断 / `"Weak"` 弱校验提醒 |
+| `RULE_ID_KEY` | `ruleId` | 规则锚点，指向图数据库中的规则本体节点 |
+| `FUNC_KEY` | `func` | 执行指令，映射底层函数名 |
+| `FIELD_ID_KEY` | `id` | 数据锚点，当前被校验的业务数据节点 |
+| `MSG_KEY` | `msg` | 详细说明 |
+| `SYNONYM_KEY` | `synonym` | 同义词 |
+| `QUERY_VARIANT_KEY` | `queryVariant` | 错意词 |
+
+### 8.1.3 关系创建审计注入
+
+`create_relationship()` 自动注入审计默认值（`relationship.rs`），用户通过 `properties` 传入同名字段时覆盖：
+
+| 字段 | 默认值 |
+|------|--------|
+| `create_time` | 当前时间 |
+| `update_time` | 当前时间 |
+| `delete_flag` | `0` |
+| `is_system` | `"0"` |
+| `create_user` | `""` |
+| `update_user` | `""` |
 
 **双向查找 API**（SHACL/LLM 用）：
 
